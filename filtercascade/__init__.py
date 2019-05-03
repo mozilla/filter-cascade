@@ -31,10 +31,8 @@ class Bloomer:
                 key = key.encode('utf-8')
             else:
                 key = str(key).encode('utf-8')
-        # log.debug("key is {}".format([c for c in key]))
         hash_seed = ((seed << 16) + self.level) & 0xFFFFFFFF
         h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
-        # log.debug("h is {}".format(h))
         return h
 
     def add(self, key):
@@ -46,10 +44,7 @@ class Bloomer:
         for i in range(self.nHashFuncs):
             index = self.hash(i, key)
             if not self.bitarray[index]:
-                # log.debug("not in {}#{}".format(self.level, i))
                 return False
-            #else:
-            #    log.debug("in {}#{}".format(self.level, i))
         return True
 
     def clear(self):
@@ -99,13 +94,14 @@ class Bloomer:
 
 
 class FilterCascade:
-    FILE_FMT = b'<III'
+    DIFF_FMT = b'<III'
 
-    def __init__(self, filters, error_rates=[0.02, 0.5]):
+    def __init__(self, filters, error_rates=[0.02, 0.5], version=0):
         self.filters = filters
         self.error_rates = error_rates
         self.growth_factor = 1.1
         self.min_filter_length = 10000
+        self.version = version
 
     def initialize(self, *, include, exclude):
         log.debug("{} include and {} exclude".format(
@@ -207,21 +203,32 @@ class FilterCascade:
     def saveDiffMeta(self, f):
         for filter in self.filters:
             f.write(
-                pack(FilterCascade.FILE_FMT, filter.size, filter.nHashFuncs,
+                pack(FilterCascade.DIFF_FMT, filter.size, filter.nHashFuncs,
                      filter.level))
 
     # Follows the bitarray.tofile parameter convention.
     def tofile(self, f):
+        NO_VERSION_FMT = "<III"
+        VERSION_FMT = "<HIII"
+
         for filter in self.filters:
-            filter.tofile(f)
+            """Write the bloom filter to file object `f'. Underlying bits
+            are written as machine values. This is much more space
+            efficient than pickling the object."""
+            if self.version == 0:
+                f.write(pack(NO_VERSION_FMT, filter.size, filter.nHashFuncs, filter.level))
+            else:
+                f.write(pack(VERSION_FMT, self.version, filter.size, filter.nHashFuncs, filter.level))
+            filter.bitarray.tofile(f)
+            f.flush()
 
     @classmethod
     def loadDiffMeta(cls, f):
         filters = []
-        size = calcsize(FilterCascade.FILE_FMT)
+        size = calcsize(FilterCascade.DIFF_FMT)
         data = f.read()
         while len(data) >= size:
-            filtersize, nHashFuncs, level = unpack(FilterCascade.FILE_FMT,
+            filtersize, nHashFuncs, level = unpack(FilterCascade.DIFF_FMT,
                                                    data[:size])
             filters.append(
                 Bloomer(size=filtersize, nHashFuncs=nHashFuncs, level=level))
@@ -233,9 +240,3 @@ class FilterCascade:
         return FilterCascade(
             [Bloomer.filter_with_characteristics(capacity, error_rates[0])],
             error_rates=error_rates)
-
-    @classmethod
-    def fromfile(cls, f):
-        buf = f.read()
-        layers = Bloomer.from_buf(buf)
-        return FilterCascade(layers)
