@@ -73,8 +73,6 @@ class Bloomer:
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
         # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
         return math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
-        #return math.ceil(1 - (nHashFuncs * (elements + 0.5) / math.log(
-        #    1 - (math.pow(falsePositiveRate, (1 / nHashFuncs))))))
 
     @classmethod
     def from_buf(cls, buf):
