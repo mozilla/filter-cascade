@@ -67,12 +67,12 @@ class Bloomer:
 
     @classmethod
     def calc_n_hashes(cls, falsePositiveRate):
-        return math.ceil(math.log(1.0 / falsePositiveRate) / math.log(2))
+        return math.ceil(math.log(1.0 / falsePositiveRate, 2))
 
     @classmethod
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
-        return math.ceil(1 - (nHashFuncs * (elements + 0.5) / math.log(
-            1 - (math.pow(falsePositiveRate, (1 / nHashFuncs))))))
+        # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
+        return math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
 
     @classmethod
     def from_buf(cls, buf):
@@ -96,11 +96,12 @@ class Bloomer:
 class FilterCascade:
     DIFF_FMT = b'<III'
 
-    def __init__(self, filters, error_rates=[0.02, 0.5], version=0):
+    def __init__(self, filters, error_rates=[0.02, 0.5], growth_factor=1.1,
+                 min_filter_length=10000, version=0):
         self.filters = filters
         self.error_rates = error_rates
-        self.growth_factor = 1.1
-        self.min_filter_length = 10000
+        self.growth_factor = growth_factor
+        self.min_filter_length = min_filter_length
         self.version = version
 
     def initialize(self, *, include, exclude):
