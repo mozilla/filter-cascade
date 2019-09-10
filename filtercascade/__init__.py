@@ -108,6 +108,8 @@ class FilterCascade:
         log.debug("{} include and {} exclude".format(
             len(include), len(exclude)))
         depth = 1
+        maxSequentialGrowthLayers = 3
+        sequentialGrowthLayers = 0
 
         while len(include) > 0:
             starttime = datetime.datetime.utcnow()
@@ -160,14 +162,21 @@ class FilterCascade:
             # Sanity check layer growth.  Bit count should be going down
             # as false positive rate decreases.
             if depth > 2:
-                if len(filter.bitarray) > len(
-                        self.filters[depth - 3].bitarray):
-                    log.error(
-                        "Increase in false positive rate detected. depth {} has {} bits and depth {} has {} bits"
-                        .format(depth, len(filter.bitarray), depth - 3,
-                                len(self.filters[depth - 3].bitarray)))
-                    self.filters.clear()
-                    return
+                if len(filter.bitarray) > len(self.filters[depth - 3].bitarray):
+                    sequentialGrowthLayers += 1
+                    log.warning(
+                        "Increase in false positive rate detected. Depth {} has {}"
+                        " bits and depth {} has {} bits. {}/{} allowed warnings."
+                        .format(depth, len(filter.bitarray), depth - 3 + 1,
+                                len(self.filters[depth - 3].bitarray),
+                                sequentialGrowthLayers, maxSequentialGrowthLayers))
+                    if sequentialGrowthLayers >= maxSequentialGrowthLayers:
+                        log.error("Too many sequential false positive increases detected. Aborting.")
+                        self.filters.clear()
+                        return
+                else:
+                    sequentialGrowthLayers = 0
+
             include, exclude = false_positives, include
             if len(include) > 0:
                 depth = depth + 1
