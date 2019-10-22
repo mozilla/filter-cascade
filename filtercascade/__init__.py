@@ -8,19 +8,24 @@ import logging
 import math
 import mmh3
 from struct import pack, unpack, calcsize
+from enum import IntEnum
 
 log = logging.getLogger(__name__)
+
+class HashAlgorithm(IntEnum):
+    MURMUR3 = 1
 
 # A simple-as-possible bloom filter implementation making use of version 3 of the 32-bit murmur
 # hash function (for compat with multi-level-bloom-filter-js).
 # mgoodwin 2018
 class Bloomer:
-    FILE_FMT = b'<III'
+    LAYER_FMT = b'<BIIB'
 
-    def __init__(self, *, size, nHashFuncs, level):
+    def __init__(self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3):
         self.nHashFuncs = nHashFuncs
         self.size = size
         self.level = level
+        self.hashAlg = hashAlg
 
         self.bitarray = bitarray.bitarray(self.size, endian='little')
         self.bitarray.setall(False)
@@ -31,6 +36,10 @@ class Bloomer:
                 key = key.encode('utf-8')
             else:
                 key = str(key).encode('utf-8')
+
+        if self.hashAlg != HashAlgorithm.MURMUR3:
+            raise Exception(f"Unknown hash algorithm: {self.hashAlg}")
+
         hash_seed = ((seed << 16) + self.level) & 0xFFFFFFFF
         h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
         return h
@@ -55,7 +64,7 @@ class Bloomer:
         """Write the bloom filter to file object `f'. Underlying bits
         are written as machine values. This is much more space
         efficient than pickling the object."""
-        f.write(pack(self.FILE_FMT, self.size, self.nHashFuncs, self.level))
+        f.write(pack(self.LAYER_FMT, self.hashAlg, self.size, self.nHashFuncs, self.level))
         f.flush()
         self.bitarray.tofile(f)
 
@@ -76,28 +85,26 @@ class Bloomer:
 
     @classmethod
     def from_buf(cls, buf):
-        filters = []
-        while len(buf) > 0:
-            log.debug(len(buf))
-            size, nHashFuncs, level = unpack(Bloomer.FILE_FMT, buf[0:12])
-            byte_count = math.ceil(size / 8)
-            ba = bitarray.bitarray(endian="little")
-            ba.frombytes(buf[12:12 + byte_count])
-            buf = buf[12 + byte_count:]
-            bloomer = Bloomer(size=1, nHashFuncs=nHashFuncs, level=level)
-            bloomer.size = size
-            log.debug("Size is {}, level {}, nHashFuncs, {}".format(
-                size, level, nHashFuncs))
-            bloomer.bitarray = ba
-            filters.append(bloomer)
-        return filters
+        log.debug(len(buf))
+        hashAlgInt, size, nHashFuncs, level = unpack(Bloomer.LAYER_FMT, buf[0:10])
+        byte_count = math.ceil(size / 8)
+        ba = bitarray.bitarray(endian="little")
+        ba.frombytes(buf[10:10 + byte_count])
+        bloomer = Bloomer(size=1, nHashFuncs=nHashFuncs, level=level, hashAlg=HashAlgorithm(hashAlgInt))
+        bloomer.size = size
+        log.debug("Size is {}, level {}, nHashFuncs, {}".format(
+            size, level, nHashFuncs))
+        bloomer.bitarray = ba
+
+        return (buf[10 + byte_count:], bloomer)
 
 
 class FilterCascade:
     DIFF_FMT = b'<III'
+    VERSION_FMT = b'<H'
 
     def __init__(self, filters, error_rates=[0.02, 0.5], growth_factor=1.1,
-                 min_filter_length=10000, version=0):
+                 min_filter_length=10000, version=1):
         self.filters = filters
         self.error_rates = error_rates
         self.growth_factor = growth_factor
@@ -218,19 +225,29 @@ class FilterCascade:
 
     # Follows the bitarray.tofile parameter convention.
     def tofile(self, f):
-        NO_VERSION_FMT = "<III"
-        VERSION_FMT = "<HIII"
+        if self.version != 1:
+            raise Exception(f"Unknown version: {self.version}")
+
+        f.write(pack(FilterCascade.VERSION_FMT, self.version))
 
         for filter in self.filters:
-            """Write the bloom filter to file object `f'. Underlying bits
-            are written as machine values. This is much more space
-            efficient than pickling the object."""
-            if self.version == 0:
-                f.write(pack(NO_VERSION_FMT, filter.size, filter.nHashFuncs, filter.level))
-            else:
-                f.write(pack(VERSION_FMT, self.version, filter.size, filter.nHashFuncs, filter.level))
-            filter.bitarray.tofile(f)
+            filter.tofile(f)
             f.flush()
+
+    @classmethod
+    def from_buf(cls, buf):
+        log.debug(len(buf))
+        (version, ) = unpack(FilterCascade.VERSION_FMT, buf[0:2])
+        if version != 1:
+            raise Exception(f"Unknown version: {version}")
+        buf = buf[2:]
+
+        filters = []
+        while len(buf) > 0:
+            (buf, f) = Bloomer.from_buf(buf)
+            filters.append(f)
+
+        return FilterCascade(filters, version=version)
 
     @classmethod
     def loadDiffMeta(cls, f):
