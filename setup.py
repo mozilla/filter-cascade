@@ -1,11 +1,11 @@
 from setuptools import setup, find_packages
 
 setup(name='filtercascade',
-      version='0.1.4',
+      version='0.2.0',
       description='A simple bloom filter cascade implementation in Python',
       long_description='A bloom filter cascade implementation in Python using the 32-bit variant of murmurhash3.',
       classifiers=[
-        'Development Status :: 3 - Alpha',
+        'Development Status :: 4 - Beta',
         'License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)',
         'Programming Language :: Python :: 3',
       ],
