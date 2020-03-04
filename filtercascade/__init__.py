@@ -32,8 +32,11 @@ class Bloomer:
 
     def hash(self, seed, key):
         if not isinstance(key, bytes):
+            to_bytes_op = getattr(key, "to_bytes", None)
             if isinstance(key, str):
                 key = key.encode('utf-8')
+            elif callable(to_bytes_op):
+                key = to_bytes_op()
             else:
                 key = str(key).encode('utf-8')
 
