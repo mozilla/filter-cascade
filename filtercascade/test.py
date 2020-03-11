@@ -1,28 +1,47 @@
-import unittest
 import filtercascade
+import hashlib
+import unittest
+from itertools import islice
+
 
 class MockFile(object):
     def __init__(self):
         self.data = b""
+
     def __len__(self):
         return len(self.data)
+
     def __getitem__(self, idx):
         return self.data[idx]
 
     def write(self, s):
         self.data = self.data + s
+
     def read(self):
         return self.data
+
     def flush(self):
         pass
+
 
 class SimpleToByteClass(object):
     def __init__(self, ordinal):
         self.o = ordinal
         self.method_called = False
+
     def to_bytes(self):
         self.method_called = True
         return self.o.to_bytes(1, "little")
+
+
+def predictable_serial_gen(end):
+    counter = 0
+    while counter < end:
+        counter += 1
+        m = hashlib.sha256()
+        m.update(counter.to_bytes(4, byteorder="big"))
+        yield m.hexdigest()
+
 
 class TestFilterCascade(unittest.TestCase):
     def assertBloomerEqual(self, b1, b2):
@@ -75,6 +94,33 @@ class TestFilterCascade(unittest.TestCase):
 
         self.assertFilterCascadeEqual(f1, f2)
         self.assertFilterCascadeEqual(f1, f3)
+
+    def test_fc_include_not_list(self):
+        f = filtercascade.FilterCascade([])
+        with self.assertRaises(TypeError):
+            f.initialize(include=predictable_serial_gen(1),
+                         exclude=predictable_serial_gen(1))
+
+    def test_fc_exclude_must_be_iterable(self):
+        f = filtercascade.FilterCascade([])
+        with self.assertRaises(TypeError):
+            f.initialize(include=[], exclude=list(1))
+
+    def test_fc_iterable(self):
+        f = filtercascade.FilterCascade([])
+
+        serials = predictable_serial_gen(500_000)
+        # revocations must be disjoint from the main set, so
+        # slice off a set and re-use the remainder
+        revocations = set(islice(serials, 3_000))
+
+        f.initialize(include=revocations,
+                     exclude=serials)
+
+        self.assertEqual(len(f.filters), 3)
+        self.assertEqual(f.filters[0].size, 81272)
+        self.assertEqual(f.filters[1].size, 14400)
+        self.assertEqual(f.filters[2].size, 14400)
 
 
 if __name__ == '__main__':

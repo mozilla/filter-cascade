@@ -115,13 +115,28 @@ class FilterCascade:
         self.version = version
 
     def initialize(self, *, include, exclude):
-        log.debug("{} include and {} exclude".format(
-            len(include), len(exclude)))
+        """
+            Arg "exclude" is potentially larger than main memory, so it should
+            be assumed to be passed as a lazy-loading iterator. If it isn't,
+            that's fine. The "include" arg must fit in memory and should be
+            assumed to be a set.
+        """
+        try:
+            iter(exclude)
+        except TypeError as te:
+            raise TypeError("exclude is not iterable", te)
+        try:
+            len(include)
+        except TypeError as te:
+            raise TypeError("include is not a list", te)
+
+        include_len = len(include)
+
         depth = 1
         maxSequentialGrowthLayers = 3
         sequentialGrowthLayers = 0
 
-        while len(include) > 0:
+        while include_len > 0:
             starttime = datetime.datetime.utcnow()
             er = self.error_rates[-1]
             if depth < len(self.error_rates):
@@ -133,24 +148,23 @@ class FilterCascade:
                     # min_filter_length large. This is important for the deep layers near the end.
                     Bloomer.filter_with_characteristics(
                         max(
-                            int(len(include) * self.growth_factor),
+                            int(include_len * self.growth_factor),
                             self.min_filter_length), er, depth))
             else:
                 # Filter already created for this layer. Check size and resize if needed.
                 required_size = Bloomer.calc_size(
-                    self.filters[depth - 1].nHashFuncs, len(include), er)
+                    self.filters[depth - 1].nHashFuncs, include_len, er)
                 if self.filters[depth - 1].size < required_size:
                     # Resize filter
                     self.filters[depth -
                                  1] = Bloomer.filter_with_characteristics(
-                                     int(len(include) * self.growth_factor),
+                                     int(include_len * self.growth_factor),
                                      er, depth)
                     log.info("Resized filter at {}-depth layer".format(depth))
             filter = self.filters[depth - 1]
             log.debug(
-                "Initializing the {}-depth layer. err={} include={} exclude={} size={} hashes={}"
-                .format(depth, er, len(include), len(exclude), filter.size,
-                        filter.nHashFuncs))
+                "Initializing the {}-depth layer. err={} include_len={} size={} hashes={}"
+                .format(depth, er, include_len, filter.size, filter.nHashFuncs))
             # loop over the elements that *should* be there. Add them to the filter.
             for elem in include:
                 filter.add(elem)
@@ -188,7 +202,8 @@ class FilterCascade:
                     sequentialGrowthLayers = 0
 
             include, exclude = false_positives, include
-            if len(include) > 0:
+            include_len = len(include)
+            if include_len > 0:
                 depth = depth + 1
         # Filter characteristics loaded from meta file may result in unused layers.
         # Remove them.
