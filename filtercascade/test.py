@@ -98,8 +98,9 @@ class TestFilterCascade(unittest.TestCase):
     def test_fc_include_not_list(self):
         f = filtercascade.FilterCascade([])
         with self.assertRaises(TypeError):
-            f.initialize(include=predictable_serial_gen(1),
-                         exclude=predictable_serial_gen(1))
+            f.initialize(
+                include=predictable_serial_gen(1), exclude=predictable_serial_gen(1)
+            )
 
     def test_fc_exclude_must_be_iterable(self):
         f = filtercascade.FilterCascade([])
@@ -114,8 +115,7 @@ class TestFilterCascade(unittest.TestCase):
         # slice off a set and re-use the remainder
         revocations = set(islice(serials, 3_000))
 
-        f.initialize(include=revocations,
-                     exclude=serials)
+        f.initialize(include=revocations, exclude=serials)
 
         self.assertEqual(len(f.filters), 3)
         self.assertEqual(f.filters[0].size, 81272)
@@ -123,5 +123,5 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(f.filters[2].size, 14400)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
