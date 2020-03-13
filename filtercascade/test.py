@@ -126,6 +126,20 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(f.filters[1].size, 14400)
         self.assertEqual(f.filters[2].size, 14400)
 
+    def test_verify_failure(self):
+        """
+        This test cheats, changing the corpus of data out from under the Bloom
+        filter. Not every such change would raise an AssertionError,
+        particularly on these small data-sets.
+        """
+        fc = filtercascade.FilterCascade([])
+
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        with self.assertRaises(AssertionError):
+            valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=2)
+            fc.verify(include=revoked2, exclude=valid2)
 
 class TestFilterCascadeSalts(unittest.TestCase):
     def test_non_byte_salt(self):
