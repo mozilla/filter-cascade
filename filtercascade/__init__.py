@@ -7,14 +7,18 @@ import datetime
 import logging
 import math
 import mmh3
+import hashlib
+from deprecated import deprecated
 from struct import pack, unpack, calcsize
-from enum import IntEnum
+from enum import IntEnum, unique
 
 log = logging.getLogger(__name__)
 
 
+@unique
 class HashAlgorithm(IntEnum):
     MURMUR3 = 1
+    SHA256 = 2
 
 
 # A simple-as-possible bloom filter implementation making use of version 3 of the 32-bit murmur
@@ -23,14 +27,22 @@ class HashAlgorithm(IntEnum):
 class Bloomer:
     LAYER_FMT = b"<BIIB"
 
-    def __init__(self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3):
+    def __init__(
+        self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3, salt=None
+    ):
         self.nHashFuncs = nHashFuncs
         self.size = size
         self.level = level
-        self.hashAlg = hashAlg
+        self.hashAlg = HashAlgorithm(hashAlg)
+        self.salt = salt
 
         self.bitarray = bitarray.bitarray(self.size, endian="little")
         self.bitarray.setall(False)
+
+        if self.salt and not isinstance(self.salt, bytes):
+            raise ValueError("salts must be passed as bytes")
+        if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
+            raise ValueError("salts not permitted for MurmurHash3")
 
     def hash(self, seed, key):
         if not isinstance(key, bytes):
@@ -42,12 +54,27 @@ class Bloomer:
             else:
                 key = str(key).encode("utf-8")
 
-        if self.hashAlg != HashAlgorithm.MURMUR3:
-            raise Exception(f"Unknown hash algorithm: {self.hashAlg}")
-
         hash_seed = ((seed << 16) + self.level) & 0xFFFFFFFF
-        h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
-        return h
+
+        if self.hashAlg == HashAlgorithm.MURMUR3:
+            if self.salt:
+                raise ValueError("salts not permitted for MurmurHash3")
+            h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
+            return h
+
+        if self.hashAlg == HashAlgorithm.SHA256:
+            m = hashlib.sha256()
+            if self.salt:
+                m.update(salt)
+            m.update(hash_seed)
+            m.update(key)
+            h = (
+                int.from_bytes(m.digest()[:4], byteorder="little", signed=False)
+                % self.size
+            )
+            return h
+
+        raise Exception(f"Unknown hash algorithm: {self.hashAlg}")
 
     def add(self, key):
         for i in range(self.nHashFuncs):
@@ -76,10 +103,20 @@ class Bloomer:
         self.bitarray.tofile(f)
 
     @classmethod
-    def filter_with_characteristics(cls, elements, falsePositiveRate, level=1):
+    def filter_with_characteristics(
+        cls,
+        *,
+        elements,
+        falsePositiveRate,
+        hashAlg=HashAlgorithm.MURMUR3,
+        salt=None,
+        level=1,
+    ):
         nHashFuncs = Bloomer.calc_n_hashes(falsePositiveRate)
         size = Bloomer.calc_size(nHashFuncs, elements, falsePositiveRate)
-        return Bloomer(size=size, nHashFuncs=nHashFuncs, level=level)
+        return Bloomer(
+            size=size, nHashFuncs=nHashFuncs, level=level, hashAlg=hashAlg, salt=salt
+        )
 
     @classmethod
     def calc_n_hashes(cls, falsePositiveRate):
@@ -91,7 +128,7 @@ class Bloomer:
         return math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
 
     @classmethod
-    def from_buf(cls, buf):
+    def from_buf(cls, buf, salt=None):
         log.debug(len(buf))
         hashAlgInt, size, nHashFuncs, level = unpack(Bloomer.LAYER_FMT, buf[0:10])
         byte_count = math.ceil(size / 8)
@@ -102,6 +139,7 @@ class Bloomer:
             nHashFuncs=nHashFuncs,
             level=level,
             hashAlg=HashAlgorithm(hashAlgInt),
+            salt=salt,
         )
         bloomer.size = size
         log.debug(
@@ -123,12 +161,21 @@ class FilterCascade:
         growth_factor=1.1,
         min_filter_length=10000,
         version=1,
+        hashAlg=HashAlgorithm.MURMUR3,
+        salt=None,
     ):
         self.filters = filters
         self.error_rates = error_rates
         self.growth_factor = growth_factor
         self.min_filter_length = min_filter_length
         self.version = version
+        self.hashAlg = hashAlg
+        self.salt = salt
+
+        if self.salt and not isinstance(self.salt, bytes):
+            raise ValueError("salts must be passed as byteas")
+        if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
+            raise ValueError("salts not permitted for MurmurHash3")
 
     def initialize(self, *, include, exclude):
         """
@@ -163,12 +210,12 @@ class FilterCascade:
                     # For growth-stability reasons, we force all layers to be at least
                     # min_filter_length large. This is important for the deep layers near the end.
                     Bloomer.filter_with_characteristics(
-                        max(
+                        elements=max(
                             int(include_len * self.growth_factor),
                             self.min_filter_length,
                         ),
-                        er,
-                        depth,
+                        falsePositiveRate=er,
+                        level=depth,
                     )
                 )
             else:
@@ -254,10 +301,17 @@ class FilterCascade:
             else:
                 return False != even
 
+    @deprecated(
+        version="0.2.3",
+        reason="Use the verify function which has the same semantics as initialize",
+    )
     def check(self, *, entries, exclusions):
-        for entry in entries:
+        self.verify(include=entries, exclude=exclusions)
+
+    def verify(self, *, include, exclude):
+        for entry in include:
             assert entry in self, "oops! false negative!"
-        for entry in exclusions:
+        for entry in exclude:
             assert not entry in self, "oops! false positive!"
 
     def bitCount(self):
@@ -315,8 +369,16 @@ class FilterCascade:
         return FilterCascade(filters)
 
     @classmethod
-    def cascade_with_characteristics(cls, capacity, error_rates, layer=0):
+    def cascade_with_characteristics(
+        cls, *, capacity, error_rates, hashAlg=HashAlgorithm.MURMUR3, salt=None, layer=0
+    ):
         return FilterCascade(
-            [Bloomer.filter_with_characteristics(capacity, error_rates[0])],
+            [
+                Bloomer.filter_with_characteristics(
+                    elements=capacity, falsePositiveRate=error_rates[0]
+                )
+            ],
             error_rates=error_rates,
+            hashAlg=hashAlg,
+            salt=salt,
         )

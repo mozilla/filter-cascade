@@ -43,6 +43,14 @@ def predictable_serial_gen(end):
         yield m.hexdigest()
 
 
+def get_serial_sets(*, num_revoked, num_valid):
+    valid = predictable_serial_gen(num_revoked + num_valid)
+    # revocations must be disjoint from the main set, so
+    # slice off a set and re-use the remainder
+    revoked = set(islice(valid, num_revoked))
+    return (valid, revoked)
+
+
 class TestFilterCascade(unittest.TestCase):
     def assertBloomerEqual(self, b1, b2):
         self.assertEqual(b1.nHashFuncs, b2.nHashFuncs)
@@ -110,17 +118,67 @@ class TestFilterCascade(unittest.TestCase):
     def test_fc_iterable(self):
         f = filtercascade.FilterCascade([])
 
-        serials = predictable_serial_gen(500_000)
-        # revocations must be disjoint from the main set, so
-        # slice off a set and re-use the remainder
-        revocations = set(islice(serials, 3_000))
-
-        f.initialize(include=revocations, exclude=serials)
+        valid, revoked = get_serial_sets(num_valid=500_000, num_revoked=3_000)
+        f.initialize(include=revoked, exclude=valid)
 
         self.assertEqual(len(f.filters), 3)
         self.assertEqual(f.filters[0].size, 81272)
         self.assertEqual(f.filters[1].size, 14400)
         self.assertEqual(f.filters[2].size, 14400)
+
+
+class TestFilterCascadeSalts(unittest.TestCase):
+    def test_non_byte_salt(self):
+        with self.assertRaises(ValueError):
+            filtercascade.FilterCascade(
+                [], hashAlg=filtercascade.HashAlgorithm.SHA256, salt=64
+            )
+
+    def test_murmur_with_salt(self):
+        with self.assertRaises(ValueError):
+            filtercascade.FilterCascade(
+                [], hashAlg=filtercascade.HashAlgorithm.MURMUR3, salt=b"happiness"
+            )
+
+    def test_sha256_with_salt(self):
+        fc = filtercascade.FilterCascade(
+            [], hashAlg=filtercascade.HashAlgorithm.SHA256, salt=b"happiness"
+        )
+
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        self.assertEqual(len(fc.filters), 1)
+        self.assertEqual(fc.bitCount(), 81272)
+
+        f = MockFile()
+        fc.tofile(f)
+        self.assertEqual(len(f.data), 10171)
+
+
+class TestFilterCascadeAlgorithms(unittest.TestCase):
+    def verify_minimum_sets(self, *, hashAlg):
+        fc = filtercascade.FilterCascade([], hashAlg=hashAlg)
+
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        self.assertEqual(len(fc.filters), 1)
+        self.assertEqual(fc.bitCount(), 81272)
+
+        f = MockFile()
+        fc.tofile(f)
+        self.assertEqual(len(f.data), 10171)
+
+        fc2 = filtercascade.FilterCascade.from_buf(f)
+        valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=1)
+        fc2.verify(include=revoked2, exclude=valid2)
+
+    def test_murmurhash3(self):
+        self.verify_minimum_sets(hashAlg=filtercascade.HashAlgorithm.MURMUR3)
+
+    def test_sha256(self):
+        self.verify_minimum_sets(hashAlg=filtercascade.HashAlgorithm.SHA256)
 
 
 if __name__ == "__main__":
