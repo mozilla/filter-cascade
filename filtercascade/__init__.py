@@ -4,12 +4,13 @@
 
 import bitarray
 import datetime
+import hashlib
+import io
 import logging
 import math
 import mmh3
-import hashlib
+import struct
 from deprecated import deprecated
-from struct import pack, unpack, calcsize
 from enum import IntEnum, unique
 
 log = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ class HashAlgorithm(IntEnum):
 # hash function (for compat with multi-level-bloom-filter-js).
 # mgoodwin 2018
 class Bloomer:
-    LAYER_FMT = b"<BIIB"
+    layer_struct = struct.Struct(b"<BIIB")
 
     def __init__(
         self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3, salt=None
@@ -97,7 +98,9 @@ class Bloomer:
         are written as machine values. This is much more space
         efficient than pickling the object."""
         f.write(
-            pack(self.LAYER_FMT, self.hashAlg, self.size, self.nHashFuncs, self.level)
+            Bloomer.layer_struct.pack(
+                self.hashAlg, self.size, self.nHashFuncs, self.level
+            )
         )
         f.flush()
         self.bitarray.tofile(f)
@@ -130,7 +133,9 @@ class Bloomer:
     @classmethod
     def from_buf(cls, buf, salt=None):
         log.debug(len(buf))
-        hashAlgInt, size, nHashFuncs, level = unpack(Bloomer.LAYER_FMT, buf[0:10])
+        hashAlgInt, size, nHashFuncs, level = Bloomer.layer_struct.unpack(
+            buf[: Bloomer.layer_struct.size]
+        )
         byte_count = math.ceil(size / 8)
         ba = bitarray.bitarray(endian="little")
         ba.frombytes(buf[10 : 10 + byte_count])
@@ -151,8 +156,24 @@ class Bloomer:
 
 
 class FilterCascade:
-    DIFF_FMT = b"<III"
-    VERSION_FMT = b"<H"
+    # The metadata struct is three values defining the configuration settings
+    # used in the production of the filter cascade, per-level.
+    # bytes 0-3: filtersize in bits as an unsigned int
+    # bytes 4-7: number of hash functions for this level, as an unsigned int
+    # bytes 8-11: level number, as an unsigned int
+    diff_struct = struct.Struct(b"<III")
+
+    # The version struct is a simple 2-byte short indicating version number
+    # bytes 0-1: The version number of this filter, as an unsigned short
+    version_struct = struct.Struct(b"<H")
+
+    # version 2 filters, after the version_struct field, have
+    # the following:
+    # byte 0: Whether the decision logic should be inverted, as a boolean
+    # byte 1: Hash algorithm enum per HashAlgorithm, as an unsigned char
+    # byte 2: L, length of salt field as a unsigned char
+    # bytes 3+: salt field of length L
+    version_2_salt_struct = struct.Struct(b"<?BB")
 
     def __init__(
         self,
@@ -160,7 +181,7 @@ class FilterCascade:
         error_rates=[0.02, 0.5],
         growth_factor=1.1,
         min_filter_length=10000,
-        version=1,
+        version=2,
         hashAlg=HashAlgorithm.MURMUR3,
         salt=None,
     ):
@@ -172,6 +193,8 @@ class FilterCascade:
         self.hashAlg = hashAlg
         self.salt = salt
 
+        if self.salt and version < 2:
+            raise ValueError("salts require format version 2 or greater")
         if self.salt and not isinstance(self.salt, bytes):
             raise ValueError("salts must be passed as byteas")
         if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
@@ -326,17 +349,24 @@ class FilterCascade:
     def saveDiffMeta(self, f):
         for filter in self.filters:
             f.write(
-                pack(
-                    FilterCascade.DIFF_FMT, filter.size, filter.nHashFuncs, filter.level
+                FilterCascade.diff_struct.pack(
+                    filter.size, filter.nHashFuncs, filter.level
                 )
             )
 
     # Follows the bitarray.tofile parameter convention.
     def tofile(self, f):
-        if self.version != 1:
+        if self.version > 2:
             raise Exception(f"Unknown version: {self.version}")
 
-        f.write(pack(FilterCascade.VERSION_FMT, self.version))
+        f.write(FilterCascade.version_struct.pack(self.version))
+        if self.version > 1:
+            salt_len = len(self.salt) if self.salt else 0
+            f.write(
+                FilterCascade.version_2_salt_struct.pack(False, self.hashAlg, salt_len)
+            )
+            if self.salt:
+                f.write(self.salt)
 
         for filter in self.filters:
             filter.tofile(f)
@@ -344,28 +374,46 @@ class FilterCascade:
 
     @classmethod
     def from_buf(cls, buf):
-        log.debug(len(buf))
-        (version,) = unpack(FilterCascade.VERSION_FMT, buf[0:2])
-        if version != 1:
+        inverted = False
+        salt = None
+        hashAlg = HashAlgorithm.MURMUR3
+
+        (version,) = FilterCascade.version_struct.unpack(
+            buf[: FilterCascade.version_struct.size]
+        )
+        buf = buf[FilterCascade.version_struct.size :]
+
+        if version > 2:
             raise Exception(f"Unknown version: {version}")
-        buf = buf[2:]
+        if version > 1:
+            (inverted, hashAlg, salt_len) = FilterCascade.version_2_salt_struct.unpack(
+                buf[: FilterCascade.version_2_salt_struct.size]
+            )
+            buf = buf[FilterCascade.version_2_salt_struct.size :]
+
+            if salt_len > 0:
+                salt = buf[:salt_len]
+                buf = buf[salt_len:]
 
         filters = []
         while len(buf) > 0:
             (buf, f) = Bloomer.from_buf(buf)
             filters.append(f)
 
-        return FilterCascade(filters, version=version)
+        return FilterCascade(
+            filters, version=version, hashAlg=hashAlg, salt=salt
+        )  # inverted=inverted,
 
     @classmethod
     def loadDiffMeta(cls, f):
         filters = []
-        size = calcsize(FilterCascade.DIFF_FMT)
         data = f.read()
-        while len(data) >= size:
-            filtersize, nHashFuncs, level = unpack(FilterCascade.DIFF_FMT, data[:size])
+        while len(data) >= FilterCascade.diff_struct.size:
+            filtersize, nHashFuncs, level = FilterCascade.diff_struct.unpack(
+                data[: FilterCascade.diff_struct.size]
+            )
             filters.append(Bloomer(size=filtersize, nHashFuncs=nHashFuncs, level=level))
-            data = data[size:]
+            data = data[FilterCascade.diff_struct.size :]
         return FilterCascade(filters)
 
     @classmethod

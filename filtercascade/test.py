@@ -63,6 +63,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(len(f1.filters), len(f2.filters))
         for i in range(0, len(f1.filters)):
             self.assertBloomerEqual(f1.filters[i], f2.filters[i])
+        self.assertEqual(f1.salt, f2.salt)
 
     def test_bloomer_serial_deserial(self):
         b1 = filtercascade.Bloomer(size=32, nHashFuncs=6, level=1)
@@ -81,11 +82,9 @@ class TestFilterCascade(unittest.TestCase):
         f1.tofile(h)
 
         f2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(f1, f2)
 
-        for i in range(0, len(f1.filters)):
-            self.assertBloomerEqual(f1.filters[i], f2.filters[i])
-
-    def test_fc_input_formats(self):
+    def test_fc_input_types(self):
         f1 = filtercascade.FilterCascade([])
         f1.initialize(include=["A"], exclude=["D"])
 
@@ -141,6 +140,42 @@ class TestFilterCascade(unittest.TestCase):
             valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=2)
             fc.verify(include=revoked2, exclude=valid2)
 
+    def test_fc_load_version_1(self):
+        fc = filtercascade.FilterCascade([], version=1)
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        h = MockFile()
+        fc.tofile(h)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
+    def test_fc_load_version_2(self):
+        fc = filtercascade.FilterCascade([], version=2)
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        h = MockFile()
+        fc.tofile(h)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
+    def test_fc_load_version_2_with_salt(self):
+        fc = filtercascade.FilterCascade(
+            [], version=2, salt=b"nacl", hashAlg=filtercascade.HashAlgorithm.SHA256
+        )
+        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
+        fc.initialize(include=revoked, exclude=valid)
+
+        h = MockFile()
+        fc.tofile(h)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
+
 class TestFilterCascadeSalts(unittest.TestCase):
     def test_non_byte_salt(self):
         with self.assertRaises(ValueError):
@@ -167,7 +202,16 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10171)
+        self.assertEqual(len(f.data), 10183)
+
+    def test_fc_version_1_with_salt(self):
+        with self.assertRaises(ValueError):
+            f1 = filtercascade.FilterCascade(
+                [],
+                hashAlg=filtercascade.HashAlgorithm.SHA256,
+                salt=b"happiness",
+                version=1,
+            )
 
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
@@ -182,7 +226,7 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10171)
+        self.assertEqual(len(f.data), 10174)
 
         fc2 = filtercascade.FilterCascade.from_buf(f)
         valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=1)
