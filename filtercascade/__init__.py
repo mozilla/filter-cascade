@@ -41,11 +41,11 @@ class Bloomer:
         self.bitarray.setall(False)
 
         if self.salt and not isinstance(self.salt, bytes):
-            raise ValueError("salts must be passed as bytes")
+            raise ValueError("salt must be passed as bytes")
         if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
-            raise ValueError("salts not permitted for MurmurHash3")
+            raise ValueError("salt not permitted for MurmurHash3")
 
-    def hash(self, seed, key):
+    def hash(self, *, hash_no, key):
         if not isinstance(key, bytes):
             to_bytes_op = getattr(key, "to_bytes", None)
             if isinstance(key, str):
@@ -55,11 +55,11 @@ class Bloomer:
             else:
                 key = str(key).encode("utf-8")
 
-        hash_seed = ((seed << 16) + self.level) & 0xFFFFFFFF
 
         if self.hashAlg == HashAlgorithm.MURMUR3:
             if self.salt:
                 raise ValueError("salts not permitted for MurmurHash3")
+            hash_seed = ((hash_no << 16) + self.level) & 0xFFFFFFFF
             h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
             return h
 
@@ -67,7 +67,8 @@ class Bloomer:
             m = hashlib.sha256()
             if self.salt:
                 m.update(salt)
-            m.update(hash_seed)
+            m.update(byte(hash_no))
+            m.update(byte(self.level))
             m.update(key)
             h = (
                 int.from_bytes(m.digest()[:4], byteorder="little", signed=False)
@@ -79,12 +80,12 @@ class Bloomer:
 
     def add(self, key):
         for i in range(self.nHashFuncs):
-            index = self.hash(i, key)
+            index = self.hash(hash_no=i, key=key)
             self.bitarray[index] = True
 
     def __contains__(self, key):
         for i in range(self.nHashFuncs):
-            index = self.hash(i, key)
+            index = self.hash(hash_no=i, key=key)
             if not self.bitarray[index]:
                 return False
         return True
@@ -158,17 +159,20 @@ class Bloomer:
 class FilterCascade:
     # The metadata struct is three values defining the configuration settings
     # used in the production of the filter cascade, per-level.
+    # Little endian (<)
     # bytes 0-3: filtersize in bits as an unsigned int
     # bytes 4-7: number of hash functions for this level, as an unsigned int
     # bytes 8-11: level number, as an unsigned int
     diff_struct = struct.Struct(b"<III")
 
     # The version struct is a simple 2-byte short indicating version number
+    # Little endian (<)
     # bytes 0-1: The version number of this filter, as an unsigned short
     version_struct = struct.Struct(b"<H")
 
     # version 2 filters, after the version_struct field, have
     # the following:
+    # Little endian (<)
     # byte 0: Whether the decision logic should be inverted, as a boolean
     # byte 1: Hash algorithm enum per HashAlgorithm, as an unsigned char
     # byte 2: L, length of salt field as a unsigned char
@@ -194,9 +198,11 @@ class FilterCascade:
         self.salt = salt
 
         if self.salt and version < 2:
-            raise ValueError("salts require format version 2 or greater")
+            raise ValueError("salt requires format version 2 or greater")
         if self.salt and not isinstance(self.salt, bytes):
-            raise ValueError("salts must be passed as byteas")
+            raise ValueError("salt must be passed as byteas")
+        if version < 2 and self.hashAlg != HashAlgorithm.MURMUR3:
+            raise ValueError("hashes other than MurmurHash3 require version 2 or greater")
         if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
@@ -402,7 +408,7 @@ class FilterCascade:
 
         return FilterCascade(
             filters, version=version, hashAlg=hashAlg, salt=salt
-        )  # inverted=inverted,
+        )
 
     @classmethod
     def loadDiffMeta(cls, f):
