@@ -5,7 +5,6 @@
 import bitarray
 import datetime
 import hashlib
-import io
 import logging
 import math
 import mmh3
@@ -55,7 +54,6 @@ class Bloomer:
             else:
                 key = str(key).encode("utf-8")
 
-
         if self.hashAlg == HashAlgorithm.MURMUR3:
             if self.salt:
                 raise ValueError("salts not permitted for MurmurHash3")
@@ -66,9 +64,9 @@ class Bloomer:
         if self.hashAlg == HashAlgorithm.SHA256:
             m = hashlib.sha256()
             if self.salt:
-                m.update(salt)
-            m.update(byte(hash_no))
-            m.update(byte(self.level))
+                m.update(self.salt)
+            m.update(chr(hash_no))
+            m.update(chr(self.level))
             m.update(key)
             h = (
                 int.from_bytes(m.digest()[:4], byteorder="little", signed=False)
@@ -184,7 +182,7 @@ class FilterCascade:
         filters,
         error_rates=[0.02, 0.5],
         growth_factor=1.1,
-        min_filter_length=10000,
+        min_filter_length=10_000,
         version=2,
         hashAlg=HashAlgorithm.MURMUR3,
         salt=None,
@@ -202,7 +200,9 @@ class FilterCascade:
         if self.salt and not isinstance(self.salt, bytes):
             raise ValueError("salt must be passed as byteas")
         if version < 2 and self.hashAlg != HashAlgorithm.MURMUR3:
-            raise ValueError("hashes other than MurmurHash3 require version 2 or greater")
+            raise ValueError(
+                "hashes other than MurmurHash3 require version 2 or greater"
+            )
         if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
@@ -326,9 +326,9 @@ class FilterCascade:
             even = layer % 2 == 0
             if elem in filter:
                 if layer == len(self.filters):
-                    return True != even
+                    return even is not True
             else:
-                return False != even
+                return even is not False
 
     @deprecated(
         version="0.2.3",
@@ -341,7 +341,7 @@ class FilterCascade:
         for entry in include:
             assert entry in self, "oops! false negative!"
         for entry in exclude:
-            assert not entry in self, "oops! false positive!"
+            assert entry not in self, "oops! false positive!"
 
     def bitCount(self):
         total = 0
@@ -406,9 +406,7 @@ class FilterCascade:
             (buf, f) = Bloomer.from_buf(buf)
             filters.append(f)
 
-        return FilterCascade(
-            filters, version=version, hashAlg=hashAlg, salt=salt
-        )
+        return FilterCascade(filters, version=version, hashAlg=hashAlg, salt=salt)
 
     @classmethod
     def loadDiffMeta(cls, f):

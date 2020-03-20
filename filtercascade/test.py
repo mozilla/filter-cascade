@@ -206,7 +206,7 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
     def test_fc_version_1_with_salt(self):
         with self.assertRaises(ValueError):
-            f1 = filtercascade.FilterCascade(
+            filtercascade.FilterCascade(
                 [],
                 hashAlg=filtercascade.HashAlgorithm.SHA256,
                 salt=b"happiness",
