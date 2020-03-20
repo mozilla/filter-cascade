@@ -285,6 +285,16 @@ class TestFilterCascadeSalts(unittest.TestCase):
                 version=1,
             )
 
+    def test_expected_error_rates(self):
+        fc = filtercascade.FilterCascade([])
+        result = fc.set_crlite_error_rates(include_len=50, exclude_len=1_000)
+        self.assertAlmostEqual(result[0], 0.0353, places=3)
+        self.assertEqual(result[1], 0.5)
+        self.assertEqual(result, fc.error_rates)
+
+        with self.assertRaises(filtercascade.InvertedLogicException):
+            fc.set_crlite_error_rates(include_len=1_000, exclude_len=50)
+
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
     def verify_minimum_sets(self, *, hashAlg):

@@ -236,6 +236,14 @@ class FilterCascade:
         if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
+    def set_crlite_error_rates(self, *, include_len, exclude_len):
+        if include_len > exclude_len:
+            raise InvertedLogicException(
+                depth=None, exclude_count=exclude_len, include_len=include_len
+            )
+        self.error_rates = [include_len / (math.sqrt(2) * exclude_len), 0.5]
+        return self.error_rates
+
     def initialize(self, *, include, exclude):
         """
             Arg "exclude" is potentially larger than main memory, so it should
