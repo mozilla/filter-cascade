@@ -22,14 +22,15 @@ class HashAlgorithm(IntEnum):
 
 
 class InvertedLogicException(Exception):
-    def __init__(self, *, exclude_count, include_len):
+    def __init__(self, *, depth, exclude_count, include_len):
         self.message = (
-            "Inefficient filter. Exclude count was smaller than the include "
-            f"count ({exclude_count}<{include_len}). If you reached this "
-            "exception, then your input data had an uncountable iterator and "
-            "the only way to fix this issue is via a code update where you "
-            "manually swap the input 'include' and 'exclude' parameters and "
-            "set the invertedLogic boolean to True upon construction."
+            f"At Depth {depth}, exclude set ({exclude_count}) was < include set "
+            f"({include_len}). If you reached this exception, then either your "
+            "input data had an uncountable iterator, or your filter length was "
+            "insufficient, and you need to increase it. The only way to fix this "
+            "issue is via a code update where you either manually swap the input "
+            "'include' and  'exclude' parameters and set the invertedLogic boolean "
+            "to True upon construction, or set a larger min_filter_length."
         )
 
     def __str__(self):
@@ -142,7 +143,9 @@ class Bloomer:
     @classmethod
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
         # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
-        return math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
+        min_bits = math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
+        # Ensure the result is divisible by 8 for full bytes
+        return 8 * math.ceil(min_bits / 8)
 
     @classmethod
     def from_buf(cls, buf, salt=None):
@@ -150,23 +153,27 @@ class Bloomer:
         hashAlgInt, size, nHashFuncs, level = Bloomer.layer_struct.unpack(
             buf[: Bloomer.layer_struct.size]
         )
+        buf = buf[Bloomer.layer_struct.size :]
+
         byte_count = math.ceil(size / 8)
         ba = bitarray.bitarray(endian="little")
-        ba.frombytes(buf[10 : 10 + byte_count])
+
+        ba.frombytes(buf[:byte_count])
+        buf = buf[byte_count:]
+
         bloomer = Bloomer(
-            size=1,
+            size=size,
             nHashFuncs=nHashFuncs,
             level=level,
             hashAlg=HashAlgorithm(hashAlgInt),
             salt=salt,
         )
-        bloomer.size = size
         log.debug(
-            "Size is {}, level {}, nHashFuncs, {}".format(size, level, nHashFuncs)
+            f"from_buf size is {size} ({byte_count} bytes), level {level}, nHashFuncs, {nHashFuncs}"
         )
         bloomer.bitarray = ba
 
-        return (buf[10 + byte_count :], bloomer)
+        return (buf, bloomer)
 
 
 class FilterCascade:
@@ -312,7 +319,7 @@ class FilterCascade:
 
             if exclude_count < include_len:
                 raise InvertedLogicException(
-                    exclude_count=exclude_count, include_len=include_len
+                    depth=depth, exclude_count=exclude_count, include_len=include_len
                 )
 
             endtime = datetime.datetime.utcnow()
@@ -450,6 +457,7 @@ class FilterCascade:
         while len(buf) > 0:
             (buf, f) = Bloomer.from_buf(buf)
             filters.append(f)
+        assert len(buf) == 0, "buffer should be consumed"
 
         return FilterCascade(
             filters, version=version, hashAlg=hashAlg, salt=salt, invertedLogic=inverted

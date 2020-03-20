@@ -57,6 +57,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(b1.size, b2.size)
         self.assertEqual(b1.level, b2.level)
         self.assertEqual(b1.hashAlg, b2.hashAlg)
+        self.assertEqual(b1.bitarray.length(), b2.bitarray.length())
         self.assertEqual(b1.bitarray, b2.bitarray)
 
     def assertFilterCascadeEqual(self, f1, f2):
@@ -182,6 +183,21 @@ class TestFilterCascade(unittest.TestCase):
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
 
+    def test_fc_small_filter_length(self):
+        fc = filtercascade.FilterCascade([], min_filter_length=8)
+
+        iterator, small_set = get_serial_iterator_and_set(
+            num_iterator=5_000, num_set=100
+        )
+
+        fc.initialize(include=small_set, exclude=iterator)
+        h = MockFile()
+        fc.tofile(h)
+        self.assertEqual(len(h.data), 281)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
     def test_fc_inverted_logic_iterators(self):
         fc = filtercascade.FilterCascade([])
         self.assertFalse(fc.invertedLogic)
@@ -193,7 +209,7 @@ class TestFilterCascade(unittest.TestCase):
             fc.initialize(include=huge_set, exclude=iterator)
 
     def test_fc_inverted_logic_automatic(self):
-        fc = filtercascade.FilterCascade([])
+        fc = filtercascade.FilterCascade([], min_filter_length=1024)
         self.assertEqual(None, fc.invertedLogic)
 
         iterator, huge_set = get_serial_iterator_and_set(
@@ -211,6 +227,9 @@ class TestFilterCascade(unittest.TestCase):
 
         h = MockFile()
         fc.tofile(h)
+
+        self.assertEqual(len(h.data), 1056)
+
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
 
