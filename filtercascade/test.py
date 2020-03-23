@@ -65,7 +65,7 @@ class TestFilterCascade(unittest.TestCase):
         for i in range(0, len(f1.filters)):
             self.assertBloomerEqual(f1.filters[i], f2.filters[i])
         self.assertEqual(f1.salt, f2.salt)
-        self.assertEqual(f1.hashAlg, f2.hashAlg)
+        self.assertEqual(f1.defaultHashAlg, f2.defaultHashAlg)
 
     def test_bloomer_serial_deserial(self):
         b1 = filtercascade.Bloomer(size=32, nHashFuncs=6, level=1)
@@ -171,7 +171,10 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_load_version_2_with_salt(self):
         fc = filtercascade.FilterCascade(
-            [], version=2, salt=b"nacl", hashAlg=filtercascade.HashAlgorithm.SHA256
+            [],
+            version=2,
+            salt=b"nacl",
+            defaultHashAlg=filtercascade.HashAlgorithm.SHA256,
         )
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
@@ -183,6 +186,30 @@ class TestFilterCascade(unittest.TestCase):
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
 
+    def test_fc_heterogenous_hash_algorithms(self):
+        fc = filtercascade.FilterCascade(
+            [
+                filtercascade.Bloomer(
+                    size=32,
+                    nHashFuncs=6,
+                    level=1,
+                    hashAlg=filtercascade.HashAlgorithm.SHA256,
+                ),
+                filtercascade.Bloomer(
+                    size=32,
+                    nHashFuncs=1,
+                    level=2,
+                    hashAlg=filtercascade.HashAlgorithm.MURMUR3,
+                ),
+            ]
+        )
+
+        h = MockFile()
+        fc.tofile(h)
+
+        with self.assertRaises(ValueError):
+            filtercascade.FilterCascade.from_buf(h)
+
     def test_fc_small_filter_length(self):
         fc = filtercascade.FilterCascade([], min_filter_length=8)
 
@@ -193,7 +220,7 @@ class TestFilterCascade(unittest.TestCase):
         fc.initialize(include=small_set, exclude=iterator)
         h = MockFile()
         fc.tofile(h)
-        self.assertEqual(len(h.data), 281)
+        self.assertEqual(len(h.data), 280)
 
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
@@ -228,7 +255,7 @@ class TestFilterCascade(unittest.TestCase):
         h = MockFile()
         fc.tofile(h)
 
-        self.assertEqual(len(h.data), 1056)
+        self.assertEqual(len(h.data), 1055)
 
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
@@ -252,18 +279,20 @@ class TestFilterCascadeSalts(unittest.TestCase):
     def test_non_byte_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                [], hashAlg=filtercascade.HashAlgorithm.SHA256, salt=64
+                [], defaultHashAlg=filtercascade.HashAlgorithm.SHA256, salt=64
             )
 
     def test_murmur_with_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                [], hashAlg=filtercascade.HashAlgorithm.MURMUR3, salt=b"happiness"
+                [],
+                defaultHashAlg=filtercascade.HashAlgorithm.MURMUR3,
+                salt=b"happiness",
             )
 
     def test_sha256_with_salt(self):
         fc = filtercascade.FilterCascade(
-            [], hashAlg=filtercascade.HashAlgorithm.SHA256, salt=b"happiness"
+            [], defaultHashAlg=filtercascade.HashAlgorithm.SHA256, salt=b"happiness"
         )
 
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
@@ -274,13 +303,13 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10183)
+        self.assertEqual(len(f.data), 10182)
 
     def test_fc_version_1_with_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
                 [],
-                hashAlg=filtercascade.HashAlgorithm.SHA256,
+                defaultHashAlg=filtercascade.HashAlgorithm.SHA256,
                 salt=b"happiness",
                 version=1,
             )
@@ -298,7 +327,7 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
     def verify_minimum_sets(self, *, hashAlg):
-        fc = filtercascade.FilterCascade([], hashAlg=hashAlg)
+        fc = filtercascade.FilterCascade([], defaultHashAlg=hashAlg)
 
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
@@ -308,7 +337,7 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10174)
+        self.assertEqual(len(f.data), 10173)
 
         fc2 = filtercascade.FilterCascade.from_buf(f)
         iterator2, small_set2 = get_serial_iterator_and_set(num_iterator=10, num_set=1)

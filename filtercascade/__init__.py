@@ -9,6 +9,7 @@ import logging
 import math
 import mmh3
 import struct
+from filtercascade import fileformats
 from deprecated import deprecated
 from enum import IntEnum, unique
 
@@ -41,8 +42,6 @@ class InvertedLogicException(Exception):
 # hash function (for compat with multi-level-bloom-filter-js).
 # mgoodwin 2018
 class Bloomer:
-    layer_struct = struct.Struct(b"<BIIB")
-
     def __init__(
         self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3, salt=None
     ):
@@ -81,8 +80,7 @@ class Bloomer:
             m = hashlib.sha256()
             if self.salt:
                 m.update(self.salt)
-            m.update(chr(hash_no))
-            m.update(chr(self.level))
+            m.update(fileformats.bloomer_sha256_hash_struct.pack(hash_no, self.level))
             m.update(key)
             h = (
                 int.from_bytes(m.digest()[:4], byteorder="little", signed=False)
@@ -113,7 +111,7 @@ class Bloomer:
         are written as machine values. This is much more space
         efficient than pickling the object."""
         f.write(
-            Bloomer.layer_struct.pack(
+            fileformats.bloomer_struct.pack(
                 self.hashAlg, self.size, self.nHashFuncs, self.level
             )
         )
@@ -150,10 +148,10 @@ class Bloomer:
     @classmethod
     def from_buf(cls, buf, salt=None):
         log.debug(len(buf))
-        hashAlgInt, size, nHashFuncs, level = Bloomer.layer_struct.unpack(
-            buf[: Bloomer.layer_struct.size]
+        hashAlgInt, size, nHashFuncs, level = fileformats.bloomer_struct.unpack(
+            buf[: fileformats.bloomer_struct.size]
         )
-        buf = buf[Bloomer.layer_struct.size :]
+        buf = buf[fileformats.bloomer_struct.size :]
 
         byte_count = math.ceil(size / 8)
         ba = bitarray.bitarray(endian="little")
@@ -177,20 +175,6 @@ class Bloomer:
 
 
 class FilterCascade:
-    # The version struct is a simple 2-byte short indicating version number
-    # Little endian (<)
-    # bytes 0-1: The version number of this filter, as an unsigned short
-    version_struct = struct.Struct(b"<H")
-
-    # version 2 filters, after the version_struct field, have
-    # the following:
-    # Little endian (<)
-    # byte 0: Whether the decision logic should be inverted, as a boolean
-    # byte 1: Hash algorithm enum per HashAlgorithm, as an unsigned char
-    # byte 2: L, length of salt field as a unsigned char
-    # bytes 3+: salt field of length L
-    version_2_salt_struct = struct.Struct(b"<?BB")
-
     def __init__(
         self,
         filters,
@@ -198,7 +182,7 @@ class FilterCascade:
         growth_factor=1.1,
         min_filter_length=10_000,
         version=2,
-        hashAlg=HashAlgorithm.MURMUR3,
+        defaultHashAlg=HashAlgorithm.MURMUR3,
         salt=None,
         invertedLogic=None,
     ):
@@ -213,7 +197,7 @@ class FilterCascade:
         self.growth_factor = growth_factor
         self.min_filter_length = min_filter_length
         self.version = version
-        self.hashAlg = hashAlg
+        self.defaultHashAlg = defaultHashAlg
         self.salt = salt
         self.invertedLogic = invertedLogic
 
@@ -221,11 +205,11 @@ class FilterCascade:
             raise ValueError("salt requires format version 2 or greater")
         if self.salt and not isinstance(self.salt, bytes):
             raise ValueError("salt must be passed as byteas")
-        if version < 2 and self.hashAlg != HashAlgorithm.MURMUR3:
+        if version < 2 and self.defaultHashAlg != HashAlgorithm.MURMUR3:
             raise ValueError(
                 "hashes other than MurmurHash3 require version 2 or greater"
             )
-        if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
+        if self.salt and self.defaultHashAlg == HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
     def set_crlite_error_rates(self, *, include_len, exclude_len):
@@ -284,6 +268,7 @@ class FilterCascade:
                         ),
                         falsePositiveRate=er,
                         level=depth,
+                        hashAlg=self.defaultHashAlg,
                     )
                 )
             else:
@@ -407,13 +392,11 @@ class FilterCascade:
         if self.version > 2:
             raise Exception(f"Unknown version: {self.version}")
 
-        f.write(FilterCascade.version_struct.pack(self.version))
+        f.write(fileformats.version_struct.pack(self.version))
         if self.version > 1:
             salt_len = len(self.salt) if self.salt else 0
             f.write(
-                FilterCascade.version_2_salt_struct.pack(
-                    self.invertedLogic, self.hashAlg, salt_len
-                )
+                fileformats.version_2_salt_struct.pack(self.invertedLogic, salt_len)
             )
             if self.salt:
                 f.write(self.salt)
@@ -426,20 +409,20 @@ class FilterCascade:
     def from_buf(cls, buf):
         inverted = False
         salt = None
-        hashAlg = HashAlgorithm.MURMUR3
+        hashAlg = None
 
-        (version,) = FilterCascade.version_struct.unpack(
-            buf[: FilterCascade.version_struct.size]
+        (version,) = fileformats.version_struct.unpack(
+            buf[: fileformats.version_struct.size]
         )
-        buf = buf[FilterCascade.version_struct.size :]
+        buf = buf[fileformats.version_struct.size :]
 
         if version > 2:
             raise Exception(f"Unknown version: {version}")
         if version > 1:
-            (inverted, hashAlg, salt_len) = FilterCascade.version_2_salt_struct.unpack(
-                buf[: FilterCascade.version_2_salt_struct.size]
+            (inverted, salt_len) = fileformats.version_2_salt_struct.unpack(
+                buf[: fileformats.version_2_salt_struct.size]
             )
-            buf = buf[FilterCascade.version_2_salt_struct.size :]
+            buf = buf[fileformats.version_2_salt_struct.size :]
 
             if salt_len > 0:
                 salt = buf[:salt_len]
@@ -451,21 +434,41 @@ class FilterCascade:
             filters.append(f)
         assert len(buf) == 0, "buffer should be consumed"
 
+        hashAlg = filters[0].hashAlg
+        for f in filters:
+            if f.hashAlg != hashAlg:
+                log.warning(
+                    f"Layer {f.level} using hash {f.hashAlg}, but layer 0 is using {hashAlg}"
+                )
+                raise ValueError("All filter layers should use the same hash algorithm")
+
         return FilterCascade(
-            filters, version=version, hashAlg=hashAlg, salt=salt, invertedLogic=inverted
+            filters,
+            version=version,
+            defaultHashAlg=hashAlg,
+            salt=salt,
+            invertedLogic=inverted,
         )
 
     @classmethod
     def cascade_with_characteristics(
-        cls, *, capacity, error_rates, hashAlg=HashAlgorithm.MURMUR3, salt=None, layer=0
+        cls,
+        *,
+        capacity,
+        error_rates,
+        defaultHashAlg=HashAlgorithm.MURMUR3,
+        salt=None,
+        layer=0,
     ):
         return FilterCascade(
             [
                 Bloomer.filter_with_characteristics(
-                    elements=capacity, falsePositiveRate=error_rates[0]
+                    elements=capacity,
+                    falsePositiveRate=error_rates[0],
+                    hashAlg=defaultHashAlg,
                 )
             ],
             error_rates=error_rates,
-            hashAlg=hashAlg,
+            defaultHashAlg=defaultHashAlg,
             salt=salt,
         )
