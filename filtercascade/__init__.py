@@ -177,14 +177,6 @@ class Bloomer:
 
 
 class FilterCascade:
-    # The metadata struct is three values defining the configuration settings
-    # used in the production of the filter cascade, per-level.
-    # Little endian (<)
-    # bytes 0-3: filtersize in bits as an unsigned int
-    # bytes 4-7: number of hash functions for this level, as an unsigned int
-    # bytes 8-11: level number, as an unsigned int
-    diff_struct = struct.Struct(b"<III")
-
     # The version struct is a simple 2-byte short indicating version number
     # Little endian (<)
     # bytes 0-1: The version number of this filter, as an unsigned short
@@ -402,14 +394,6 @@ class FilterCascade:
     def layerCount(self):
         return len(self.filters)
 
-    def saveDiffMeta(self, f):
-        for filter in self.filters:
-            f.write(
-                FilterCascade.diff_struct.pack(
-                    filter.size, filter.nHashFuncs, filter.level
-                )
-            )
-
     # Follows the bitarray.tofile parameter convention.
     def tofile(self, f):
         if self.version > 2:
@@ -462,18 +446,6 @@ class FilterCascade:
         return FilterCascade(
             filters, version=version, hashAlg=hashAlg, salt=salt, invertedLogic=inverted
         )
-
-    @classmethod
-    def loadDiffMeta(cls, f):
-        filters = []
-        data = f.read()
-        while len(data) >= FilterCascade.diff_struct.size:
-            filtersize, nHashFuncs, level = FilterCascade.diff_struct.unpack(
-                data[: FilterCascade.diff_struct.size]
-            )
-            filters.append(Bloomer(size=filtersize, nHashFuncs=nHashFuncs, level=level))
-            data = data[FilterCascade.diff_struct.size :]
-        return FilterCascade(filters)
 
     @classmethod
     def cascade_with_characteristics(
