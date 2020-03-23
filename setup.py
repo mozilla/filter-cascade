@@ -11,7 +11,12 @@ setup(
         "Programming Language :: Python :: 3",
     ],
     keywords="bloom filter cascade multi level mlbf",
-    url="http://github.com/mozmark/filter-cascade",
+    url="https://github.com/mozilla/filter-cascade",
+    project_urls={
+        "Rust Project": "https://github.com/mozilla/rust-cascade",
+        "Source": "https://github.com/mozilla/filter-cascade",
+        "Tracker": "https://github.com/mozilla/filter-cascade/issues",
+    },
     author="Mark Goodwin",
     author_email="mgoodwin@mozilla.com",
     license="Mozilla Public License 2.0 (MPL 2.0)",
