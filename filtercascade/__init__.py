@@ -21,6 +21,22 @@ class HashAlgorithm(IntEnum):
     SHA256 = 2
 
 
+class InvertedLogicException(Exception):
+    def __init__(self, *, depth, exclude_count, include_len):
+        self.message = (
+            f"At Depth {depth}, exclude set ({exclude_count}) was < include set "
+            f"({include_len}). If you reached this exception, then either your "
+            "input data had an uncountable iterator, or your filter length was "
+            "insufficient, and you need to increase it. The only way to fix this "
+            "issue is via a code update where you either manually swap the input "
+            "'include' and  'exclude' parameters and set the invertedLogic boolean "
+            "to True upon construction, or set a larger min_filter_length."
+        )
+
+    def __str__(self):
+        return self.message
+
+
 # A simple-as-possible bloom filter implementation making use of version 3 of the 32-bit murmur
 # hash function (for compat with multi-level-bloom-filter-js).
 # mgoodwin 2018
@@ -127,7 +143,9 @@ class Bloomer:
     @classmethod
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
         # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
-        return math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
+        min_bits = math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
+        # Ensure the result is divisible by 8 for full bytes
+        return 8 * math.ceil(min_bits / 8)
 
     @classmethod
     def from_buf(cls, buf, salt=None):
@@ -135,23 +153,27 @@ class Bloomer:
         hashAlgInt, size, nHashFuncs, level = Bloomer.layer_struct.unpack(
             buf[: Bloomer.layer_struct.size]
         )
+        buf = buf[Bloomer.layer_struct.size :]
+
         byte_count = math.ceil(size / 8)
         ba = bitarray.bitarray(endian="little")
-        ba.frombytes(buf[10 : 10 + byte_count])
+
+        ba.frombytes(buf[:byte_count])
+        buf = buf[byte_count:]
+
         bloomer = Bloomer(
-            size=1,
+            size=size,
             nHashFuncs=nHashFuncs,
             level=level,
             hashAlg=HashAlgorithm(hashAlgInt),
             salt=salt,
         )
-        bloomer.size = size
         log.debug(
-            "Size is {}, level {}, nHashFuncs, {}".format(size, level, nHashFuncs)
+            f"from_buf size is {size} ({byte_count} bytes), level {level}, nHashFuncs, {nHashFuncs}"
         )
         bloomer.bitarray = ba
 
-        return (buf[10 + byte_count :], bloomer)
+        return (buf, bloomer)
 
 
 class FilterCascade:
@@ -186,7 +208,14 @@ class FilterCascade:
         version=2,
         hashAlg=HashAlgorithm.MURMUR3,
         salt=None,
+        invertedLogic=None,
     ):
+        """
+            Construct a FilterCascade.
+            error_rates: If not supplied, defaults will be calculated
+            invertedLogic: If not supplied (or left as None), it will be auto-
+                detected.
+        """
         self.filters = filters
         self.error_rates = error_rates
         self.growth_factor = growth_factor
@@ -194,6 +223,7 @@ class FilterCascade:
         self.version = version
         self.hashAlg = hashAlg
         self.salt = salt
+        self.invertedLogic = invertedLogic
 
         if self.salt and version < 2:
             raise ValueError("salt requires format version 2 or greater")
@@ -221,6 +251,15 @@ class FilterCascade:
             len(include)
         except TypeError as te:
             raise TypeError("include is not a list", te)
+
+        if self.invertedLogic is None:
+            try:
+                self.invertedLogic = len(include) > len(exclude)
+            except TypeError:
+                self.invertedLogic = False
+
+        if self.invertedLogic:
+            include, exclude = exclude, include
 
         include_len = len(include)
 
@@ -272,9 +311,16 @@ class FilterCascade:
             # that *includes* the false positives and *excludes* the true positives
             log.debug("Processing false positives")
             false_positives = set()
+            exclude_count = 0
             for elem in exclude:
+                exclude_count += 1
                 if elem in filter:
                     false_positives.add(elem)
+
+            if exclude_count < include_len:
+                raise InvertedLogicException(
+                    depth=depth, exclude_count=exclude_count, include_len=include_len
+                )
 
             endtime = datetime.datetime.utcnow()
             log.debug(
@@ -319,7 +365,7 @@ class FilterCascade:
         if depth < len(self.filters):
             del self.filters[depth:]
 
-    def __contains__(self, elem):
+    def __internal_contains__(self, elem):
         for layer, filter in [
             (idx + 1, self.filters[idx]) for idx in range(len(self.filters))
         ]:
@@ -329,6 +375,10 @@ class FilterCascade:
                     return even is not True
             else:
                 return even is not False
+
+    def __contains__(self, elem):
+        result = self.__internal_contains__(elem)
+        return not result if self.invertedLogic is True else result
 
     @deprecated(
         version="0.2.3",
@@ -369,7 +419,9 @@ class FilterCascade:
         if self.version > 1:
             salt_len = len(self.salt) if self.salt else 0
             f.write(
-                FilterCascade.version_2_salt_struct.pack(False, self.hashAlg, salt_len)
+                FilterCascade.version_2_salt_struct.pack(
+                    self.invertedLogic, self.hashAlg, salt_len
+                )
             )
             if self.salt:
                 f.write(self.salt)
@@ -405,8 +457,11 @@ class FilterCascade:
         while len(buf) > 0:
             (buf, f) = Bloomer.from_buf(buf)
             filters.append(f)
+        assert len(buf) == 0, "buffer should be consumed"
 
-        return FilterCascade(filters, version=version, hashAlg=hashAlg, salt=salt)
+        return FilterCascade(
+            filters, version=version, hashAlg=hashAlg, salt=salt, invertedLogic=inverted
+        )
 
     @classmethod
     def loadDiffMeta(cls, f):

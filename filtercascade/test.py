@@ -43,12 +43,12 @@ def predictable_serial_gen(end):
         yield m.hexdigest()
 
 
-def get_serial_sets(*, num_revoked, num_valid):
-    valid = predictable_serial_gen(num_revoked + num_valid)
+def get_serial_iterator_and_set(*, num_set, num_iterator):
+    iterator_data = predictable_serial_gen(num_iterator + num_set)
     # revocations must be disjoint from the main set, so
     # slice off a set and re-use the remainder
-    revoked = set(islice(valid, num_revoked))
-    return (valid, revoked)
+    set_data = set(islice(iterator_data, num_set))
+    return (iterator_data, set_data)
 
 
 class TestFilterCascade(unittest.TestCase):
@@ -57,6 +57,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(b1.size, b2.size)
         self.assertEqual(b1.level, b2.level)
         self.assertEqual(b1.hashAlg, b2.hashAlg)
+        self.assertEqual(b1.bitarray.length(), b2.bitarray.length())
         self.assertEqual(b1.bitarray, b2.bitarray)
 
     def assertFilterCascadeEqual(self, f1, f2):
@@ -64,6 +65,7 @@ class TestFilterCascade(unittest.TestCase):
         for i in range(0, len(f1.filters)):
             self.assertBloomerEqual(f1.filters[i], f2.filters[i])
         self.assertEqual(f1.salt, f2.salt)
+        self.assertEqual(f1.hashAlg, f2.hashAlg)
 
     def test_bloomer_serial_deserial(self):
         b1 = filtercascade.Bloomer(size=32, nHashFuncs=6, level=1)
@@ -76,7 +78,7 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_serial_deserial(self):
         f1 = filtercascade.FilterCascade([])
-        f1.initialize(include=["A", "B", "C"], exclude=["D"])
+        f1.initialize(exclude=["A", "B", "C"], include=["D"])
 
         h = MockFile()
         f1.tofile(h)
@@ -117,8 +119,11 @@ class TestFilterCascade(unittest.TestCase):
     def test_fc_iterable(self):
         f = filtercascade.FilterCascade([])
 
-        valid, revoked = get_serial_sets(num_valid=500_000, num_revoked=3_000)
-        f.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(
+            num_iterator=500_000, num_set=3_000
+        )
+        f.initialize(include=small_set, exclude=iterator)
+        self.assertFalse(f.invertedLogic)
 
         self.assertEqual(len(f.filters), 3)
         self.assertEqual(f.filters[0].size, 81272)
@@ -133,17 +138,19 @@ class TestFilterCascade(unittest.TestCase):
         """
         fc = filtercascade.FilterCascade([])
 
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
 
         with self.assertRaises(AssertionError):
-            valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=2)
-            fc.verify(include=revoked2, exclude=valid2)
+            iterator2, small_set2 = get_serial_iterator_and_set(
+                num_iterator=10, num_set=2
+            )
+            fc.verify(include=small_set2, exclude=iterator2)
 
     def test_fc_load_version_1(self):
         fc = filtercascade.FilterCascade([], version=1)
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
 
         h = MockFile()
         fc.tofile(h)
@@ -153,8 +160,8 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_load_version_2(self):
         fc = filtercascade.FilterCascade([], version=2)
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
 
         h = MockFile()
         fc.tofile(h)
@@ -166,14 +173,79 @@ class TestFilterCascade(unittest.TestCase):
         fc = filtercascade.FilterCascade(
             [], version=2, salt=b"nacl", hashAlg=filtercascade.HashAlgorithm.SHA256
         )
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
+        self.assertFalse(fc.invertedLogic)
 
         h = MockFile()
         fc.tofile(h)
 
         fc2 = filtercascade.FilterCascade.from_buf(h)
         self.assertFilterCascadeEqual(fc, fc2)
+
+    def test_fc_small_filter_length(self):
+        fc = filtercascade.FilterCascade([], min_filter_length=8)
+
+        iterator, small_set = get_serial_iterator_and_set(
+            num_iterator=5_000, num_set=100
+        )
+
+        fc.initialize(include=small_set, exclude=iterator)
+        h = MockFile()
+        fc.tofile(h)
+        self.assertEqual(len(h.data), 281)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
+    def test_fc_inverted_logic_iterators(self):
+        fc = filtercascade.FilterCascade([])
+        self.assertFalse(fc.invertedLogic)
+
+        iterator, huge_set = get_serial_iterator_and_set(
+            num_iterator=100, num_set=50_000
+        )
+        with self.assertRaises(filtercascade.InvertedLogicException):
+            fc.initialize(include=huge_set, exclude=iterator)
+
+    def test_fc_inverted_logic_automatic(self):
+        fc = filtercascade.FilterCascade([], min_filter_length=1024)
+        self.assertEqual(None, fc.invertedLogic)
+
+        iterator, huge_set = get_serial_iterator_and_set(
+            num_iterator=100, num_set=50_000
+        )
+
+        # Should automatically invert the logic
+        fc.initialize(include=huge_set, exclude=set(iterator))
+        self.assertTrue(fc.invertedLogic)
+
+        iterator, huge_set = get_serial_iterator_and_set(
+            num_iterator=100, num_set=50_000
+        )
+        fc.verify(include=huge_set, exclude=iterator)
+
+        h = MockFile()
+        fc.tofile(h)
+
+        self.assertEqual(len(h.data), 1056)
+
+        fc2 = filtercascade.FilterCascade.from_buf(h)
+        self.assertFilterCascadeEqual(fc, fc2)
+
+        iterator, huge_set = get_serial_iterator_and_set(
+            num_iterator=100, num_set=50_000
+        )
+        fc2.verify(include=huge_set, exclude=iterator)
+
+    def test_fc_inverted_logic_explicit(self):
+        fc = filtercascade.FilterCascade([], invertedLogic=True)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=2, num_set=2)
+        fc.initialize(include=small_set, exclude=set(iterator))
+        self.assertTrue(fc.invertedLogic)
+
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=2, num_set=2)
+        fc.verify(include=small_set, exclude=iterator)
 
 
 class TestFilterCascadeSalts(unittest.TestCase):
@@ -194,8 +266,8 @@ class TestFilterCascadeSalts(unittest.TestCase):
             [], hashAlg=filtercascade.HashAlgorithm.SHA256, salt=b"happiness"
         )
 
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
 
         self.assertEqual(len(fc.filters), 1)
         self.assertEqual(fc.bitCount(), 81272)
@@ -218,8 +290,8 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
     def verify_minimum_sets(self, *, hashAlg):
         fc = filtercascade.FilterCascade([], hashAlg=hashAlg)
 
-        valid, revoked = get_serial_sets(num_valid=10, num_revoked=1)
-        fc.initialize(include=revoked, exclude=valid)
+        iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc.initialize(include=small_set, exclude=iterator)
 
         self.assertEqual(len(fc.filters), 1)
         self.assertEqual(fc.bitCount(), 81272)
@@ -229,8 +301,8 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
         self.assertEqual(len(f.data), 10174)
 
         fc2 = filtercascade.FilterCascade.from_buf(f)
-        valid2, revoked2 = get_serial_sets(num_valid=10, num_revoked=1)
-        fc2.verify(include=revoked2, exclude=valid2)
+        iterator2, small_set2 = get_serial_iterator_and_set(num_iterator=10, num_set=1)
+        fc2.verify(include=small_set2, exclude=iterator2)
 
     def test_murmurhash3(self):
         self.verify_minimum_sets(hashAlg=filtercascade.HashAlgorithm.MURMUR3)
