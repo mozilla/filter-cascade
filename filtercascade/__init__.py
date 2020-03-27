@@ -11,15 +11,8 @@ import mmh3
 import struct
 from filtercascade import fileformats
 from deprecated import deprecated
-from enum import IntEnum, unique
 
 log = logging.getLogger(__name__)
-
-
-@unique
-class HashAlgorithm(IntEnum):
-    MURMUR3 = 1
-    SHA256 = 2
 
 
 class InvertedLogicException(Exception):
@@ -43,12 +36,18 @@ class InvertedLogicException(Exception):
 # mgoodwin 2018
 class Bloomer:
     def __init__(
-        self, *, size, nHashFuncs, level, hashAlg=HashAlgorithm.MURMUR3, salt=None
+        self,
+        *,
+        size,
+        nHashFuncs,
+        level,
+        hashAlg=fileformats.HashAlgorithm.MURMUR3,
+        salt=None,
     ):
         self.nHashFuncs = nHashFuncs
         self.size = size
         self.level = level
-        self.hashAlg = HashAlgorithm(hashAlg)
+        self.hashAlg = fileformats.HashAlgorithm(hashAlg)
         self.salt = salt
 
         self.bitarray = bitarray.bitarray(self.size, endian="little")
@@ -56,7 +55,7 @@ class Bloomer:
 
         if self.salt and not isinstance(self.salt, bytes):
             raise ValueError("salt must be passed as bytes")
-        if self.salt and self.hashAlg == HashAlgorithm.MURMUR3:
+        if self.salt and self.hashAlg == fileformats.HashAlgorithm.MURMUR3:
             raise ValueError("salt not permitted for MurmurHash3")
 
     def hash(self, *, hash_no, key):
@@ -69,14 +68,14 @@ class Bloomer:
             else:
                 key = str(key).encode("utf-8")
 
-        if self.hashAlg == HashAlgorithm.MURMUR3:
+        if self.hashAlg == fileformats.HashAlgorithm.MURMUR3:
             if self.salt:
                 raise ValueError("salts not permitted for MurmurHash3")
             hash_seed = ((hash_no << 16) + self.level) & 0xFFFFFFFF
             h = (mmh3.hash(key, hash_seed) & 0xFFFFFFFF) % self.size
             return h
 
-        if self.hashAlg == HashAlgorithm.SHA256:
+        if self.hashAlg == fileformats.HashAlgorithm.SHA256:
             m = hashlib.sha256()
             if self.salt:
                 m.update(self.salt)
@@ -124,7 +123,7 @@ class Bloomer:
         *,
         elements,
         falsePositiveRate,
-        hashAlg=HashAlgorithm.MURMUR3,
+        hashAlg=fileformats.HashAlgorithm.MURMUR3,
         salt=None,
         level=1,
     ):
@@ -163,7 +162,7 @@ class Bloomer:
             size=size,
             nHashFuncs=nHashFuncs,
             level=level,
-            hashAlg=HashAlgorithm(hashAlgInt),
+            hashAlg=fileformats.HashAlgorithm(hashAlgInt),
             salt=salt,
         )
         log.debug(
@@ -182,7 +181,7 @@ class FilterCascade:
         growth_factor=1.1,
         min_filter_length=10_000,
         version=2,
-        defaultHashAlg=HashAlgorithm.MURMUR3,
+        defaultHashAlg=fileformats.HashAlgorithm.MURMUR3,
         salt=None,
         invertedLogic=None,
     ):
@@ -205,11 +204,11 @@ class FilterCascade:
             raise ValueError("salt requires format version 2 or greater")
         if self.salt and not isinstance(self.salt, bytes):
             raise ValueError("salt must be passed as byteas")
-        if version < 2 and self.defaultHashAlg != HashAlgorithm.MURMUR3:
+        if version < 2 and self.defaultHashAlg != fileformats.HashAlgorithm.MURMUR3:
             raise ValueError(
                 "hashes other than MurmurHash3 require version 2 or greater"
             )
-        if self.salt and self.defaultHashAlg == HashAlgorithm.MURMUR3:
+        if self.salt and self.defaultHashAlg == fileformats.HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
     def set_crlite_error_rates(self, *, include_len, exclude_len):
@@ -266,6 +265,7 @@ class FilterCascade:
                             int(include_len * self.growth_factor),
                             self.min_filter_length,
                         ),
+                        salt=self.salt,
                         falsePositiveRate=er,
                         level=depth,
                         hashAlg=self.defaultHashAlg,
@@ -456,7 +456,7 @@ class FilterCascade:
         *,
         capacity,
         error_rates,
-        defaultHashAlg=HashAlgorithm.MURMUR3,
+        defaultHashAlg=fileformats.HashAlgorithm.MURMUR3,
         salt=None,
         layer=0,
     ):
