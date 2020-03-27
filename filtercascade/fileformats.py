@@ -10,9 +10,10 @@ bloomer_struct = struct.Struct(b"<BIIB")
 
 # This struct packs the hash iteration number and the layer number
 # into two bytes in a defined way for SHA256.
-# byte 0: hash iteration number as an unsigned char
-# byte 1: layer number of this bloom filter, as an unsigned char
-bloomer_sha256_hash_struct = struct.Struct(b"<BB")
+# Little endian (<)
+# byte 0-3: hash iteration number for this layer, as an unsigned int
+# byte 4: layer number of this bloom filter, as an unsigned char
+bloomer_sha256_hash_struct = struct.Struct(b"<IB")
 
 # The version struct is a simple 2-byte short indicating version number
 # Little endian (<)
