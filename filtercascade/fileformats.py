@@ -1,5 +1,14 @@
 import struct
 
+from enum import IntEnum, unique
+
+
+@unique
+class HashAlgorithm(IntEnum):
+    MURMUR3 = 1
+    SHA256 = 2
+
+
 # The header for each Bloom filter level
 # Little endian (<)
 # byte 0: Hash algorithm enumeration, as an unsigned char
