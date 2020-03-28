@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="filtercascade",
-    version="0.2.2",
+    version="0.3.0",
     description="A simple bloom filter cascade implementation in Python",
     long_description="A bloom filter cascade implementation in Python using the 32-bit variant of murmurhash3.",
     classifiers=[
