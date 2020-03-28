@@ -409,7 +409,6 @@ class FilterCascade:
     def from_buf(cls, buf):
         inverted = False
         salt = None
-        hashAlg = None
 
         (version,) = fileformats.version_struct.unpack(
             buf[: fileformats.version_struct.size]
