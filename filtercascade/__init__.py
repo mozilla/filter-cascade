@@ -302,7 +302,7 @@ class FilterCascade:
                 if elem in filter:
                     false_positives.add(elem)
 
-            if exclude_count < include_len:
+            if depth == 1 and exclude_count < include_len:
                 raise InvertedLogicException(
                     depth=depth, exclude_count=exclude_count, include_len=include_len
                 )
