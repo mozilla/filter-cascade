@@ -135,12 +135,12 @@ class Bloomer:
 
     @classmethod
     def calc_n_hashes(cls, falsePositiveRate):
-        return math.ceil(math.log(1.0 / falsePositiveRate, 2))
+        return math.ceil(math.log2(1.0 / falsePositiveRate))
 
     @classmethod
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
         # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
-        min_bits = math.ceil(1.44 * elements * math.log(1 / falsePositiveRate, 2))
+        min_bits = math.ceil(1.44 * elements * math.log2(1 / falsePositiveRate))
         # Ensure the result is divisible by 8 for full bytes
         return 8 * math.ceil(min_bits / 8)
 
@@ -180,7 +180,7 @@ class FilterCascade:
         *,
         error_rates=[0.02, 0.5],
         growth_factor=1.1,
-        min_filter_length=10_000,
+        min_filter_length=1_000,
         version=2,
         defaultHashAlg=fileformats.HashAlgorithm.MURMUR3,
         salt=None,
@@ -264,8 +264,6 @@ class FilterCascade:
 
             if depth > len(self.filters):
                 self.filters.append(
-                    # For growth-stability reasons, we force all layers to be at least
-                    # min_filter_length large. This is important for the deep layers near the end.
                     Bloomer.filter_with_characteristics(
                         elements=max(
                             int(include_len * self.growth_factor),
@@ -290,16 +288,23 @@ class FilterCascade:
                         level=depth,
                         hashAlg=self.defaultHashAlg,
                     )
-                    log.info("Resized filter at {}-depth layer".format(depth))
-            filter = self.filters[depth - 1]
+                    log.info(
+                        f"Resized filter at {depth}-depth layer to {self.filters[depth - 1].size}"
+                    )
+
+            current_filter = self.filters[depth - 1]
             log.debug(
                 "Initializing the {}-depth layer. err={} include_len={} size={} hashes={}".format(
-                    depth, er, include_len, filter.size, filter.nHashFuncs
+                    depth,
+                    er,
+                    include_len,
+                    current_filter.size,
+                    current_filter.nHashFuncs,
                 )
             )
             # loop over the elements that *should* be there. Add them to the filter.
             for elem in include:
-                filter.add(elem)
+                current_filter.add(elem)
 
             # loop over the elements that should *not* be there. Create a new layer
             # that *includes* the false positives and *excludes* the true positives
@@ -308,7 +313,7 @@ class FilterCascade:
             exclude_count = 0
             for elem in exclude:
                 exclude_count += 1
-                if elem in filter:
+                if elem in current_filter:
                     false_positives.add(elem)
             log.debug(f"Found {len(false_positives)} false positives at depth {depth}.")
 
@@ -323,13 +328,13 @@ class FilterCascade:
                     (endtime - starttime).seconds * 1000
                     + (endtime - starttime).microseconds / 1000,
                     depth,
-                    len(filter.bitarray),
+                    len(current_filter.bitarray),
                 )
             )
             # Sanity check layer growth.  Bit count should be going down
             # as false positive rate decreases.
             if depth > 2:
-                if len(filter.bitarray) > len(self.filters[depth - 3].bitarray):
+                if len(current_filter.bitarray) > len(self.filters[depth - 3].bitarray):
                     sequentialGrowthLayers += 1
                     log.warning(
                         "Increase in false positive rate detected. Depth {} has {}"

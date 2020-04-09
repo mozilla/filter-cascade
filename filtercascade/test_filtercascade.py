@@ -128,10 +128,15 @@ class TestFilterCascade(unittest.TestCase):
         f.initialize(include=small_set, exclude=iterator)
         self.assertFalse(f.invertedLogic)
 
-        self.assertEqual(len(f.filters), 3)
-        self.assertEqual(f.filters[0].size, 81272)
-        self.assertEqual(f.filters[1].size, 14400)
-        self.assertEqual(f.filters[2].size, 14400)
+        self.assertEqual(len(f.filters), 10)
+        self.assertEqual(
+            list(map(lambda x: x.size, f.filters)),
+            [26824, 10624, 2184, 5208, 1440, 1872, 1440, 1440, 1440, 1440],
+        )
+
+        h = MockFile()
+        f.tofile(h)
+        self.assertEqual(len(h), 6843)
 
     def test_verify_failure(self):
         """
@@ -390,11 +395,11 @@ class TestFilterCascadeSalts(unittest.TestCase):
         fc.initialize(include=small_set, exclude=iterator)
 
         self.assertEqual(len(fc.filters), 1)
-        self.assertEqual(fc.bitCount(), 81272)
+        self.assertEqual(fc.bitCount(), 8128)
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10182)
+        self.assertEqual(len(f.data), 1039)
 
     def test_fc_version_1_with_salt(self):
         with self.assertRaises(ValueError):
@@ -423,11 +428,11 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
         fc.initialize(include=small_set, exclude=iterator)
 
         self.assertEqual(len(fc.filters), 1)
-        self.assertEqual(fc.bitCount(), 81272)
+        self.assertEqual(fc.bitCount(), 8128)
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 10173)
+        self.assertEqual(len(f.data), 1030)
 
         fc2 = filtercascade.FilterCascade.from_buf(f)
         iterator2, small_set2 = get_serial_iterator_and_set(num_iterator=10, num_set=1)
