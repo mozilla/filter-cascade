@@ -80,7 +80,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertBloomerEqual(b1, b2)
 
     def test_fc_serial_deserial(self):
-        f1 = filtercascade.FilterCascade([])
+        f1 = filtercascade.FilterCascade()
         f1.initialize(exclude=["A", "B", "C"], include=["D"])
 
         h = MockFile()
@@ -90,15 +90,15 @@ class TestFilterCascade(unittest.TestCase):
         self.assertFilterCascadeEqual(f1, f2)
 
     def test_fc_input_types(self):
-        f1 = filtercascade.FilterCascade([])
+        f1 = filtercascade.FilterCascade()
         f1.initialize(include=["A"], exclude=["D"])
 
-        f2 = filtercascade.FilterCascade([])
+        f2 = filtercascade.FilterCascade()
         f2.initialize(include=[b"A"], exclude=[b"D"])
 
         incClass = SimpleToByteClass(ord("A"))
         excClass = SimpleToByteClass(ord("D"))
-        f3 = filtercascade.FilterCascade([])
+        f3 = filtercascade.FilterCascade()
         f3.initialize(include=[incClass], exclude=[excClass])
 
         self.assertTrue(incClass.method_called)
@@ -108,7 +108,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertFilterCascadeEqual(f1, f3)
 
     def test_fc_include_not_list(self):
-        f = filtercascade.FilterCascade([])
+        f = filtercascade.FilterCascade()
         with self.assertRaises(TypeError):
             f.initialize(
                 include=predictable_serial_gen(1), exclude=predictable_serial_gen(1)
@@ -120,7 +120,7 @@ class TestFilterCascade(unittest.TestCase):
             f.initialize(include=[], exclude=list(1))
 
     def test_fc_iterable(self):
-        f = filtercascade.FilterCascade([])
+        f = filtercascade.FilterCascade(filters=[])
 
         iterator, small_set = get_serial_iterator_and_set(
             num_iterator=500_000, num_set=3_000
@@ -139,7 +139,7 @@ class TestFilterCascade(unittest.TestCase):
         filter. Not every such change would raise an AssertionError,
         particularly on these small data-sets.
         """
-        fc = filtercascade.FilterCascade([])
+        fc = filtercascade.FilterCascade()
 
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
@@ -151,7 +151,7 @@ class TestFilterCascade(unittest.TestCase):
             fc.verify(include=small_set2, exclude=iterator2)
 
     def test_fc_load_version_1(self):
-        fc = filtercascade.FilterCascade([], version=1)
+        fc = filtercascade.FilterCascade(version=1)
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
 
@@ -162,7 +162,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertFilterCascadeEqual(fc, fc2)
 
     def test_fc_load_version_2(self):
-        fc = filtercascade.FilterCascade([], version=2)
+        fc = filtercascade.FilterCascade(version=2)
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
 
@@ -174,7 +174,6 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_load_version_2_with_salt(self):
         fc = filtercascade.FilterCascade(
-            [],
             version=2,
             salt=b"nacl",
             defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
@@ -214,7 +213,7 @@ class TestFilterCascade(unittest.TestCase):
             filtercascade.FilterCascade.from_buf(h)
 
     def test_fc_small_filter_length(self):
-        fc = filtercascade.FilterCascade([], min_filter_length=8)
+        fc = filtercascade.FilterCascade(min_filter_length=8)
 
         iterator, small_set = get_serial_iterator_and_set(
             num_iterator=5_000, num_set=100
@@ -229,7 +228,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertFilterCascadeEqual(fc, fc2)
 
     def test_fc_inverted_logic_iterators(self):
-        fc = filtercascade.FilterCascade([])
+        fc = filtercascade.FilterCascade()
         self.assertFalse(fc.invertedLogic)
 
         iterator, huge_set = get_serial_iterator_and_set(
@@ -239,7 +238,7 @@ class TestFilterCascade(unittest.TestCase):
             fc.initialize(include=huge_set, exclude=iterator)
 
     def test_fc_inverted_logic_automatic(self):
-        fc = filtercascade.FilterCascade([], min_filter_length=1024)
+        fc = filtercascade.FilterCascade(min_filter_length=1024)
         self.assertEqual(None, fc.invertedLogic)
 
         iterator, huge_set = get_serial_iterator_and_set(
@@ -269,7 +268,7 @@ class TestFilterCascade(unittest.TestCase):
         fc2.verify(include=huge_set, exclude=iterator)
 
     def test_fc_inverted_logic_explicit(self):
-        fc = filtercascade.FilterCascade([], invertedLogic=True)
+        fc = filtercascade.FilterCascade(invertedLogic=True)
         iterator, small_set = get_serial_iterator_and_set(num_iterator=2, num_set=2)
         fc.initialize(include=small_set, exclude=set(iterator))
         self.assertTrue(fc.invertedLogic)
@@ -285,7 +284,7 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_inverted_logic_disk_layout(self):
         fc = filtercascade.FilterCascade(
-            [], defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=b"a"
+            defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=b"a"
         )
         iterator, huge_set = get_serial_iterator_and_set(
             num_iterator=100, num_set=50_000
@@ -305,7 +304,7 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_standard_logic_disk_layout(self):
         fc = filtercascade.FilterCascade(
-            [], defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=b"a"
+            defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=b"a"
         )
         iterator, small_set = get_serial_iterator_and_set(
             num_iterator=50_000, num_set=100
@@ -371,22 +370,18 @@ class TestFilterCascadeSalts(unittest.TestCase):
     def test_non_byte_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                [],
-                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
-                salt=64,
+                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=64,
             )
 
     def test_murmur_with_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                [],
                 defaultHashAlg=filtercascade.fileformats.HashAlgorithm.MURMUR3,
                 salt=b"happiness",
             )
 
     def test_sha256_with_salt(self):
         fc = filtercascade.FilterCascade(
-            [],
             defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
             salt=b"happiness",
         )
@@ -404,14 +399,13 @@ class TestFilterCascadeSalts(unittest.TestCase):
     def test_fc_version_1_with_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                [],
                 defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
                 salt=b"happiness",
                 version=1,
             )
 
     def test_expected_error_rates(self):
-        fc = filtercascade.FilterCascade([])
+        fc = filtercascade.FilterCascade()
         result = fc.set_crlite_error_rates(include_len=50, exclude_len=1_000)
         self.assertAlmostEqual(result[0], 0.0353, places=3)
         self.assertEqual(result[1], 0.5)
@@ -423,7 +417,7 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
     def verify_minimum_sets(self, *, hashAlg):
-        fc = filtercascade.FilterCascade([], defaultHashAlg=hashAlg)
+        fc = filtercascade.FilterCascade(defaultHashAlg=hashAlg)
 
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)

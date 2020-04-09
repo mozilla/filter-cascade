@@ -176,7 +176,8 @@ class Bloomer:
 class FilterCascade:
     def __init__(
         self,
-        filters,
+        filters=None,
+        *,
         error_rates=[0.02, 0.5],
         growth_factor=1.1,
         min_filter_length=10_000,
@@ -191,7 +192,7 @@ class FilterCascade:
             invertedLogic: If not supplied (or left as None), it will be auto-
                 detected.
         """
-        self.filters = filters
+        self.filters = filters or []
         self.error_rates = error_rates
         self.growth_factor = growth_factor
         self.min_filter_length = min_filter_length
