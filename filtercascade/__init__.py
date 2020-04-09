@@ -211,6 +211,11 @@ class FilterCascade:
         if self.salt and self.defaultHashAlg == fileformats.HashAlgorithm.MURMUR3:
             raise ValueError("salts not permitted for MurmurHash3")
 
+    def set_error_rates(self, new_rates):
+        if len(new_rates) < 1:
+            raise ValueError("You must supply at least one error rate")
+        self.error_rates = new_rates
+
     def set_crlite_error_rates(self, *, include_len, exclude_len):
         if include_len > exclude_len:
             raise InvertedLogicException(
@@ -301,6 +306,7 @@ class FilterCascade:
                 exclude_count += 1
                 if elem in filter:
                     false_positives.add(elem)
+            log.debug(f"Found {len(false_positives)} false positives at depth {depth}.")
 
             if depth == 1 and exclude_count < include_len:
                 raise InvertedLogicException(
@@ -374,9 +380,9 @@ class FilterCascade:
 
     def verify(self, *, include, exclude):
         for entry in include:
-            assert entry in self, "oops! false negative!"
+            assert entry in self, f"Verification Failure: false negative: {entry}"
         for entry in exclude:
-            assert entry not in self, "oops! false positive!"
+            assert entry not in self, f"Verification Failure: false positive: {entry}"
 
     def bitCount(self):
         total = 0
@@ -429,7 +435,7 @@ class FilterCascade:
 
         filters = []
         while len(buf) > 0:
-            (buf, f) = Bloomer.from_buf(buf)
+            (buf, f) = Bloomer.from_buf(buf, salt=salt)
             filters.append(f)
         assert len(buf) == 0, "buffer should be consumed"
 
@@ -442,7 +448,7 @@ class FilterCascade:
                 raise ValueError("All filter layers should use the same hash algorithm")
 
         return FilterCascade(
-            filters,
+            filters=filters,
             version=version,
             defaultHashAlg=hashAlg,
             salt=salt,
@@ -450,6 +456,13 @@ class FilterCascade:
         )
 
     @classmethod
+    @deprecated(
+        version="0.4.0",
+        reason=(
+            "Use the standard __init__ function generally set error rates with "
+            + "set_crlite_error_rates or set_error_rates"
+        ),
+    )
     def cascade_with_characteristics(
         cls,
         *,
@@ -460,11 +473,12 @@ class FilterCascade:
         layer=0,
     ):
         return FilterCascade(
-            [
+            filters=[
                 Bloomer.filter_with_characteristics(
                     elements=capacity,
                     falsePositiveRate=error_rates[0],
                     hashAlg=defaultHashAlg,
+                    salt=salt,
                 )
             ],
             error_rates=error_rates,

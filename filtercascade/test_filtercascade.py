@@ -2,6 +2,7 @@ import filtercascade
 import hashlib
 import math
 import unittest
+import warnings
 from itertools import islice
 
 
@@ -190,7 +191,7 @@ class TestFilterCascade(unittest.TestCase):
 
     def test_fc_heterogenous_hash_algorithms(self):
         fc = filtercascade.FilterCascade(
-            [
+            filters=[
                 filtercascade.Bloomer(
                     size=32,
                     nHashFuncs=6,
@@ -345,19 +346,24 @@ class TestFilterCascade(unittest.TestCase):
         salt = b"sixteenbyteslong"
         fprs = [len(blocked) / (math.sqrt(2) * len(not_blocked)), 0.5]
 
-        cascade_out = filtercascade.FilterCascade.cascade_with_characteristics(
-            capacity=int(len(blocked) * 1.1),
-            error_rates=fprs,
-            defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
-            salt=salt,
-        )
-        cascade_out.initialize(include=blocked, exclude=not_blocked)
-        cascade_out.verify(include=blocked, exclude=not_blocked)
-
         f = MockFile()
-        cascade_out.tofile(f)
+
+        with warnings.catch_warnings(record=True) as w:
+            cascade_out = filtercascade.FilterCascade.cascade_with_characteristics(
+                capacity=int(len(blocked) * 1.1),
+                error_rates=fprs,
+                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+                salt=salt,
+            )
+            assert "deprecated" in str(w[-1].message)
+
+            cascade_out.initialize(include=blocked, exclude=not_blocked)
+            cascade_out.verify(include=blocked, exclude=not_blocked)
+
+            cascade_out.tofile(f)
 
         cascade_in = filtercascade.FilterCascade.from_buf(f)
+        self.assertFilterCascadeEqual(cascade_out, cascade_in)
         cascade_in.verify(include=blocked, exclude=not_blocked)
 
 
