@@ -17,6 +17,6 @@
     - id: filter-cascade-tests
       name: Tests for filter-cascade
       language: system
-      entry: python3 -m unittest filtercascade/test.py
+      entry: python3 -m pytest .
       pass_filenames: false
       files: '.py$'
