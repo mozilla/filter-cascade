@@ -284,7 +284,10 @@ class FilterCascade:
                 if self.filters[depth - 1].size < required_size:
                     # Resize filter
                     self.filters[depth - 1] = Bloomer.filter_with_characteristics(
-                        int(include_len * self.growth_factor), er, depth
+                        elements=int(include_len * self.growth_factor),
+                        falsePositiveRate=er,
+                        level=depth,
+                        hashAlg=self.defaultHashAlg,
                     )
                     log.info("Resized filter at {}-depth layer".format(depth))
             filter = self.filters[depth - 1]
