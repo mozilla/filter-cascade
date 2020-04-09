@@ -1,5 +1,6 @@
 import filtercascade
 import hashlib
+import math
 import unittest
 from itertools import islice
 
@@ -320,6 +321,44 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(h.data[3], 1)  # salt_len
         self.assertEqual(h.data[4], ord("a"))  # salt
         self.assertEqual(h.data[5], filtercascade.fileformats.HashAlgorithm.SHA256)
+
+    def test_fc_write_rewrite(self):
+        _blocked = [
+            ("guid1@", "1.0"),
+            ("@guid2", "1.0"),
+            ("@guid2", "1.1"),
+            ("guid3@", "0.01b1"),
+        ]
+        blocked = [f"{guid}:{version}" for guid, version in _blocked]
+        _not_blocked = [
+            ("guid10@", "1.0"),
+            ("@guid20", "1.0"),
+            ("@guid20", "1.1"),
+            ("guid30@", "0.01b1"),
+            ("guid100@", "1.0"),
+            ("@guid200", "1.0"),
+            ("@guid200", "1.1"),
+            ("guid300@", "0.01b1"),
+        ]
+        not_blocked = [f"{guid}:{version}" for guid, version in _not_blocked]
+
+        salt = b"sixteenbyteslong"
+        fprs = [len(blocked) / (math.sqrt(2) * len(not_blocked)), 0.5]
+
+        cascade_out = filtercascade.FilterCascade.cascade_with_characteristics(
+            capacity=int(len(blocked) * 1.1),
+            error_rates=fprs,
+            defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+            salt=salt,
+        )
+        cascade_out.initialize(include=blocked, exclude=not_blocked)
+        cascade_out.verify(include=blocked, exclude=not_blocked)
+
+        f = MockFile()
+        cascade_out.tofile(f)
+
+        cascade_in = filtercascade.FilterCascade.from_buf(f)
+        cascade_in.verify(include=blocked, exclude=not_blocked)
 
 
 class TestFilterCascadeSalts(unittest.TestCase):
