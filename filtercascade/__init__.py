@@ -31,6 +31,18 @@ class InvertedLogicException(Exception):
         return self.message
 
 
+class InvalidErrorRateException(Exception):
+    def __init__(self, *, falsePositiveRate):
+        self.message = (
+            "All false positive rates must be between 0 and 1, but this one is"
+            f"{falsePositiveRate}. Consider calculating the error rate using the "
+            "set_crlite_error_rates function."
+        )
+
+    def __str__(self):
+        return self.message
+
+
 # A simple-as-possible bloom filter implementation making use of version 3 of the 32-bit murmur
 # hash function (for compat with multi-level-bloom-filter-js).
 # mgoodwin 2018
@@ -135,12 +147,17 @@ class Bloomer:
 
     @classmethod
     def calc_n_hashes(cls, falsePositiveRate):
-        return math.ceil(math.log2(1.0 / falsePositiveRate))
+        nHashes = math.ceil(math.log2(1.0 / falsePositiveRate))
+        assert nHashes > 0, "Always must have a positive number of hashes"
+        return nHashes
 
     @classmethod
     def calc_size(cls, nHashFuncs, elements, falsePositiveRate):
+        if falsePositiveRate < 0 or falsePositiveRate > 1:
+            raise InvalidErrorRateException(falsePositiveRate=falsePositiveRate)
         # From CRLite paper, https://cbw.sh/static/pdf/larisch-oakland17.pdf
         min_bits = math.ceil(1.44 * elements * math.log2(1 / falsePositiveRate))
+        assert min_bits > 0, "Always must have a positive number of bits"
         # Ensure the result is divisible by 8 for full bytes
         return 8 * math.ceil(min_bits / 8)
 
@@ -193,13 +210,14 @@ class FilterCascade:
                 detected.
         """
         self.filters = filters or []
-        self.error_rates = error_rates
         self.growth_factor = growth_factor
         self.min_filter_length = min_filter_length
         self.version = version
         self.defaultHashAlg = defaultHashAlg
         self.salt = salt
         self.invertedLogic = invertedLogic
+
+        self.set_error_rates(error_rates)
 
         if self.salt and version < 2:
             raise ValueError("salt requires format version 2 or greater")
@@ -215,15 +233,18 @@ class FilterCascade:
     def set_error_rates(self, new_rates):
         if len(new_rates) < 1:
             raise ValueError("You must supply at least one error rate")
+        for falsePositiveRate in new_rates:
+            if falsePositiveRate <= 0 or falsePositiveRate >= 1:
+                raise InvalidErrorRateException(falsePositiveRate=falsePositiveRate)
         self.error_rates = new_rates
+        return self.error_rates
 
     def set_crlite_error_rates(self, *, include_len, exclude_len):
         if include_len > exclude_len:
             raise InvertedLogicException(
                 depth=None, exclude_count=exclude_len, include_len=include_len
             )
-        self.error_rates = [include_len / (math.sqrt(2) * exclude_len), 0.5]
-        return self.error_rates
+        return self.set_error_rates([include_len / (math.sqrt(2) * exclude_len), 0.5])
 
     def initialize(self, *, include, exclude):
         """
@@ -340,7 +361,7 @@ class FilterCascade:
                         "Increase in false positive rate detected. Depth {} has {}"
                         " bits and depth {} has {} bits. {}/{} allowed warnings.".format(
                             depth,
-                            len(filter.bitarray),
+                            len(current_filter.bitarray),
                             depth - 3 + 1,
                             len(self.filters[depth - 3].bitarray),
                             sequentialGrowthLayers,
