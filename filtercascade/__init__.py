@@ -147,6 +147,8 @@ class Bloomer:
 
     @classmethod
     def calc_n_hashes(cls, falsePositiveRate):
+        if falsePositiveRate < 0 or falsePositiveRate > 1:
+            raise InvalidErrorRateException(falsePositiveRate=falsePositiveRate)
         nHashes = math.ceil(math.log2(1.0 / falsePositiveRate))
         assert nHashes > 0, "Always must have a positive number of hashes"
         return nHashes
