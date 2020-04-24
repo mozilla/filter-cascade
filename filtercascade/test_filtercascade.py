@@ -419,6 +419,55 @@ class TestFilterCascadeSalts(unittest.TestCase):
         with self.assertRaises(filtercascade.InvertedLogicException):
             fc.set_crlite_error_rates(include_len=1_000, exclude_len=50)
 
+    def test_set_error_rates(self):
+        fc = filtercascade.FilterCascade()
+        with self.assertRaises(ValueError):
+            fc.set_error_rates([])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([-1])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([1.1])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([0])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([0, 0.25, 0.9])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([0.25, 0.9, 1.0])
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            fc.set_error_rates([0.25, 0.9, 940])
+
+        fc.set_error_rates([0.99, 0.01])
+
+    def test_inverted_logic_erroneous_error_rate(self):
+        not_blocked = ["one_not_blocked_item"]
+        blocked = [str(i) for i in range(1000)]
+        fprs = [len(blocked) / (math.sqrt(2) * len(not_blocked)), 0.5]
+        with self.assertRaises(filtercascade.InvalidErrorRateException):
+            filtercascade.FilterCascade(
+                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+                salt=b"VERY_PREDICTABLE",
+                error_rates=fprs,
+            )
+
+    def test_increased_false_positive_rate_in_deeper_layer(self):
+        salt = b"VERY_PREDICTABLE"
+        blocked = []
+        not_blocked = []
+        for i in range(1, 1000):
+            not_blocked.append(str(-i))
+            blocked.append(str(i))
+        fprs = [len(blocked) / (math.sqrt(2) * len(not_blocked)), 0.5]
+        fc = filtercascade.FilterCascade(
+            error_rates=fprs,
+            defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+            salt=salt,
+        )
+        fc.initialize(include=blocked, exclude=not_blocked)
+        fc.verify(include=blocked, exclude=not_blocked)
+
+        self.assertEqual(len(fc.filters), 6)
+        self.assertEqual(fc.bitCount(), 7992)
+
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
     def verify_minimum_sets(self, *, hashAlg):
