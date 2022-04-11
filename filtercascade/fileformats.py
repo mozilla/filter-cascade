@@ -7,6 +7,7 @@ from enum import IntEnum, unique
 class HashAlgorithm(IntEnum):
     MURMUR3 = 1
     SHA256 = 2
+    SHA256CTR = 3
 
 
 # The header for each Bloom filter level
@@ -23,6 +24,11 @@ bloomer_struct = struct.Struct(b"<BIIB")
 # byte 0-3: hash iteration number for this layer, as an unsigned int
 # byte 4: layer number of this bloom filter, as an unsigned char
 bloomer_sha256_hash_struct = struct.Struct(b"<IB")
+
+# This struct packs a single counter in 4 bytes for the SHA256CTR mode
+# Little endian (<)
+# byte 0-3: hash iteration counter, as an unsigned int
+bloomer_sha256ctr_hash_struct = struct.Struct(b"<I")
 
 # The version struct is a simple 2-byte short indicating version number
 # Little endian (<)

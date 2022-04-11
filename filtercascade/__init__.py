@@ -15,6 +15,10 @@ from deprecated import deprecated
 log = logging.getLogger(__name__)
 
 
+def byte_length(bit_length):
+    return (bit_length + 7) // 8
+
+
 class InvertedLogicException(Exception):
     def __init__(self, *, depth, exclude_count, include_len):
         self.message = (
@@ -54,12 +58,14 @@ class Bloomer:
         nHashFuncs,
         level,
         hashAlg=fileformats.HashAlgorithm.MURMUR3,
+        hashOffset=0,
         salt=None,
     ):
         self.nHashFuncs = nHashFuncs
         self.size = size
         self.level = level
         self.hashAlg = fileformats.HashAlgorithm(hashAlg)
+        self.hashOffset = hashOffset
         self.salt = salt
 
         self.bitarray = bitarray.bitarray(self.size, endian="little")
@@ -99,6 +105,23 @@ class Bloomer:
             )
             return h
 
+        if self.hashAlg == fileformats.HashAlgorithm.SHA256CTR:
+            b = []
+            bytes_needed = byte_length(self.size.bit_length())
+            offset = self.hashOffset + hash_no * bytes_needed
+            while len(b) < bytes_needed:
+                m = hashlib.sha256()
+                m.update(fileformats.bloomer_sha256ctr_hash_struct.pack(offset // 32))
+                m.update(self.salt)
+                m.update(key)
+                digest = m.digest()
+                i = offset % 32
+                x = digest[i : i + bytes_needed - len(b)]
+                b.extend(x)
+                offset += len(x)
+            h = int.from_bytes(b, byteorder="little", signed=False) % self.size
+            return h
+
         raise Exception(f"Unknown hash algorithm: {self.hashAlg}")
 
     def add(self, key):
@@ -136,13 +159,19 @@ class Bloomer:
         elements,
         falsePositiveRate,
         hashAlg=fileformats.HashAlgorithm.MURMUR3,
+        hashOffset=0,
         salt=None,
         level=1,
     ):
         nHashFuncs = Bloomer.calc_n_hashes(falsePositiveRate)
         size = Bloomer.calc_size(nHashFuncs, elements, falsePositiveRate)
         return Bloomer(
-            size=size, nHashFuncs=nHashFuncs, level=level, hashAlg=hashAlg, salt=salt
+            size=size,
+            nHashFuncs=nHashFuncs,
+            level=level,
+            hashAlg=hashAlg,
+            hashOffset=hashOffset,
+            salt=salt,
         )
 
     @classmethod
@@ -161,7 +190,7 @@ class Bloomer:
         min_bits = math.ceil(1.44 * elements * math.log2(1 / falsePositiveRate))
         assert min_bits > 0, "Always must have a positive number of bits"
         # Ensure the result is divisible by 8 for full bytes
-        return 8 * math.ceil(min_bits / 8)
+        return 8 * byte_length(min_bits)
 
     @classmethod
     def from_buf(cls, buf, salt=None):
@@ -206,10 +235,10 @@ class FilterCascade:
         invertedLogic=None,
     ):
         """
-            Construct a FilterCascade.
-            error_rates: If not supplied, defaults will be calculated
-            invertedLogic: If not supplied (or left as None), it will be auto-
-                detected.
+        Construct a FilterCascade.
+        error_rates: If not supplied, defaults will be calculated
+        invertedLogic: If not supplied (or left as None), it will be auto-
+            detected.
         """
         self.filters = filters or []
         self.growth_factor = growth_factor
@@ -250,10 +279,10 @@ class FilterCascade:
 
     def initialize(self, *, include, exclude):
         """
-            Arg "exclude" is potentially larger than main memory, so it should
-            be assumed to be passed as a lazy-loading iterator. If it isn't,
-            that's fine. The "include" arg must fit in memory and should be
-            assumed to be a set.
+        Arg "exclude" is potentially larger than main memory, so it should
+        be assumed to be passed as a lazy-loading iterator. If it isn't,
+        that's fine. The "include" arg must fit in memory and should be
+        assumed to be a set.
         """
         try:
             iter(exclude)
@@ -286,6 +315,13 @@ class FilterCascade:
                 er = self.error_rates[depth - 1]
 
             if depth > len(self.filters):
+                if len(self.filters) == 0:
+                    hashOffset = 0
+                else:
+                    prev = self.filters[-1]
+                    hashOffset = prev.hashOffset + prev.nHashFuncs * byte_length(
+                        prev.size.bit_length()
+                    )
                 self.filters.append(
                     Bloomer.filter_with_characteristics(
                         elements=max(
@@ -296,10 +332,15 @@ class FilterCascade:
                         falsePositiveRate=er,
                         level=depth,
                         hashAlg=self.defaultHashAlg,
+                        hashOffset=hashOffset,
                     )
                 )
             else:
                 # Filter already created for this layer. Check size and resize if needed.
+                prev = self.filters[depth - 1]
+                hashOffset = prev.hashOffset + prev.nHashFuncs * byte_length(
+                    prev.size.bit_length()
+                )
                 required_size = Bloomer.calc_size(
                     self.filters[depth - 1].nHashFuncs, include_len, er
                 )
@@ -310,6 +351,7 @@ class FilterCascade:
                         falsePositiveRate=er,
                         level=depth,
                         hashAlg=self.defaultHashAlg,
+                        hashOffset=hashOffset,
                     )
                     log.info(
                         f"Resized filter at {depth}-depth layer to {self.filters[depth - 1].size}"
