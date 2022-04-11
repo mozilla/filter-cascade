@@ -59,7 +59,7 @@ class TestFilterCascade(unittest.TestCase):
         self.assertEqual(b1.size, b2.size)
         self.assertEqual(b1.level, b2.level)
         self.assertEqual(b1.hashAlg, b2.hashAlg)
-        self.assertEqual(b1.bitarray.length(), b2.bitarray.length())
+        self.assertEqual(len(b1.bitarray), len(b2.bitarray))
         self.assertEqual(b1.bitarray, b2.bitarray)
 
     def assertFilterCascadeEqual(self, f1, f2):
@@ -375,7 +375,8 @@ class TestFilterCascadeSalts(unittest.TestCase):
     def test_non_byte_salt(self):
         with self.assertRaises(ValueError):
             filtercascade.FilterCascade(
-                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256, salt=64,
+                defaultHashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+                salt=64,
             )
 
     def test_murmur_with_salt(self):
@@ -470,8 +471,8 @@ class TestFilterCascadeSalts(unittest.TestCase):
 
 
 class TestFilterCascadeAlgorithms(unittest.TestCase):
-    def verify_minimum_sets(self, *, hashAlg):
-        fc = filtercascade.FilterCascade(defaultHashAlg=hashAlg)
+    def verify_minimum_sets(self, *, hashAlg, salt):
+        fc = filtercascade.FilterCascade(defaultHashAlg=hashAlg, salt=salt)
 
         iterator, small_set = get_serial_iterator_and_set(num_iterator=10, num_set=1)
         fc.initialize(include=small_set, exclude=iterator)
@@ -481,7 +482,9 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
 
         f = MockFile()
         fc.tofile(f)
-        self.assertEqual(len(f.data), 1030)
+        self.assertEqual(
+            len(f.data), 1030 + (len(salt) if isinstance(salt, bytes) else 0)
+        )
 
         fc2 = filtercascade.FilterCascade.from_buf(f)
         iterator2, small_set2 = get_serial_iterator_and_set(num_iterator=10, num_set=1)
@@ -489,11 +492,20 @@ class TestFilterCascadeAlgorithms(unittest.TestCase):
 
     def test_murmurhash3(self):
         self.verify_minimum_sets(
-            hashAlg=filtercascade.fileformats.HashAlgorithm.MURMUR3
+            hashAlg=filtercascade.fileformats.HashAlgorithm.MURMUR3,
+            salt=None,
         )
 
     def test_sha256(self):
-        self.verify_minimum_sets(hashAlg=filtercascade.fileformats.HashAlgorithm.SHA256)
+        self.verify_minimum_sets(
+            hashAlg=filtercascade.fileformats.HashAlgorithm.SHA256,
+            salt=None,
+        )
+
+    def test_sha256ctr(self):
+        self.verify_minimum_sets(
+            hashAlg=filtercascade.fileformats.HashAlgorithm.SHA256CTR, salt=b"salt"
+        )
 
 
 if __name__ == "__main__":
